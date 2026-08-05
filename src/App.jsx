@@ -4,7 +4,7 @@ import {
   BookOpen, ChevronLeft, ChevronRight, X, Wallet, AlertTriangle,
 } from "lucide-react";
 import { loadData, saveData } from "./api.js";
-import { C, SP, ACCENT_COLORS, fmtNum } from "./theme.js";
+import { C, T, SP, ACCENT_COLORS, fmtNum } from "./theme.js";
 
 // Code-split: recharts + lucide-heavy chart view loaded only when Charts is opened.
 const ChartsView = lazy(() => import("./views/Charts.jsx"));
@@ -32,6 +32,9 @@ const resetBtn = {
 // Sequential focus (CSS, not CSS-in-JS) for global focus-visible rings.
 const globalCss = `
 * { box-sizing: border-box; }
+
+/* Money + table digits align in columns — zero jitter when figures change. */
+body { font-variant-numeric: tabular-nums; }
 html, body, #root { height: 100%; }
 body { margin: 0; }
 :focus-visible {
@@ -46,9 +49,16 @@ input:focus {
 }
 
 /* ── Press feedback on solid actions ── */
-.press { transition: transform 0.08s ease-out, background-color 0.12s ease-out; }
+.press { transition: transform 0.08s ease-out, background-color 0.12s ease-out, filter 0.12s ease-out; }
 .press:active { transform: scale(0.98); }
+.press:hover:not(:disabled) { filter: brightness(1.06); }
 .press:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+/* ── Ghost icon buttons (back, close, per-row trash) ── */
+.iconbtn { transition: transform 0.08s ease-out, background-color 0.14s ease-out; }
+.iconbtn:hover { background-color: rgba(26,23,20,0.06); }
+.iconbtn:active { transform: scale(0.9); }
+.iconbtn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* ── Account row hover lift ── */
 .acc-row {
@@ -134,6 +144,28 @@ input:focus {
 }
 @media (prefers-reduced-motion: reduce) {
   .overlay, .overlay::before, .dialog-pop { animation: none; }
+}
+
+/* ── View/content transition: quick fade+rise on switch ── */
+@keyframes viewIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.view-in { animation: viewIn 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .view-in { animation: none; }
+}
+
+/* ── Dashboard stat-card count-up lift ── */
+.stat-card { transition: box-shadow 0.18s ease-out, transform 0.18s ease-out; }
+.stat-card:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(0,0,0,0.07); }
+.stat-card:active { transform: translateY(0); box-shadow: none; }
+
+/* ── Sibling stagger for account rows / stat cards ── */
+.stagger > * { animation: viewIn 0.24s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i, 0) * 45ms); }
+@media (prefers-reduced-motion: reduce) {
+  .stagger > * { animation: none; }
+  .stat-card, .acc-row { transform: none !important; transition: none !important; }
 }
 `;
 
@@ -357,7 +389,7 @@ export default function LedgerApp() {
 
         {/* Dashboard */}
         {view === "dashboard" && (
-          <div style={{ padding: `${SP.xl}px ${SP.pagePad}px`, flex: 1 }}>
+          <div className="view-in" style={{ padding: `${SP.xl}px ${SP.pagePad}px`, flex: 1 }}>
             <div style={{ marginBottom: SP.xl }}>
               <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: C.textPrimary }}>Dashboard</h1>
               <p style={{ margin: "4px 0 0", fontSize: 13, color: C.textSecondary }}>{data.accounts.length} account{data.accounts.length !== 1 ? "s" : ""} · {data.transactions.length} transaction{data.transactions.length !== 1 ? "s" : ""}</p>
@@ -370,20 +402,20 @@ export default function LedgerApp() {
                 </div>
                 <div style={{ fontSize: 16, color: C.textPrimary, fontWeight: 500, marginBottom: 6 }}>No accounts yet</div>
                 <div style={{ fontSize: 13, color: C.textSecondary, marginBottom: 20 }}>Create your first account to start tracking money</div>
-                <button type="button" onClick={() => openPanel("add-acc")} className="press" style={{ background: C.accent, color: "#fff", border: "none", borderRadius: 7, padding: "10px 22px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                <button type="button" onClick={() => openPanel("add-acc")} className="press" style={{ background: C.accent, color: "#fff", border: "none", borderRadius: 7, padding: "10px 22px", fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
                   + New Account
                 </button>
               </div>
             ) : (
               <>
                 {/* Summary Stats */}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: SP.md, marginBottom: SP.sectionGap }}>
+                <div className="stagger" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: SP.md, marginBottom: SP.sectionGap }}>
                   {[
                     { label: "Total Credit (In)", val: totals.credit, color: C.credit, pre: "+" },
                     { label: "Total Debit (Out)", val: totals.debit, color: C.debit, pre: "-" },
                     { label: "Net Balance", val: Math.abs(totals.balance), color: totals.balance >= 0 ? C.credit : C.debit, pre: totals.balance < 0 ? "-" : "" },
                   ].map((s, i) => (
-                    <div key={i} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.lg}px ${SP.cardPad.md}px` }}>
+                    <div key={i} className="stat-card" style={{ "--i": i, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.lg}px ${SP.cardPad.md}px` }}>
                       <div style={{ fontSize: 11, color: C.textSecondary, textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: SP.sm }}>{s.label}</div>
                       <div style={{ fontSize: 21, color: s.color, fontWeight: 700, letterSpacing: "-0.5px" }}>
                         {s.pre}{RS}{fmtNum(s.val)}
@@ -394,10 +426,10 @@ export default function LedgerApp() {
 
                 {/* Account List */}
                 <div style={{ fontSize: 13, fontWeight: 600, color: C.textPrimary, marginBottom: 10 }}>All accounts</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: SP.sm }}>
+                <div className="stagger" style={{ display: "flex", flexDirection: "column", gap: SP.sm }}>
                   {stats.map((acc, i) => (
                     <button key={acc.id} type="button" onClick={() => openAcc(acc.id)} className="acc-row"
-                      style={{ ...resetBtn, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.md}px ${SP.cardPad.md}px`, cursor: "pointer", width: "100%", alignItems: "center", gap: SP.md }}>
+                      style={{ "--i": i, ...resetBtn, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.md}px ${SP.cardPad.md}px`, cursor: "pointer", width: "100%", alignItems: "center", gap: SP.md }}>
                       <div style={{ width: 38, height: 38, borderRadius: "50%", background: ACCENT_COLORS[i % ACCENT_COLORS.length] + "18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: ACCENT_COLORS[i % ACCENT_COLORS.length], flexShrink: 0 }}>
                         {acc.name.charAt(0).toUpperCase()}
                       </div>
@@ -428,11 +460,11 @@ export default function LedgerApp() {
 
         {/* Account Detail */}
         {view === "account" && activeAcc && (
-          <div style={{ display: "flex", flexDirection: "column", flex: 1 }}>
+          <div className="view-in" style={{ display: "flex", flexDirection: "column", flex: 1 }}>
             <div style={{ padding: `${SP.xl}px ${SP.pagePad}px 0`, background: C.card, borderBottom: `1px solid ${C.border}` }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: SP.lg }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <button type="button" onClick={() => setView("dashboard")} aria-label="Back to dashboard"
+                  <button type="button" onClick={() => setView("dashboard")} aria-label="Back to dashboard" className="iconbtn"
                     style={{ ...resetBtn, color: C.textSecondary, padding: 4, borderRadius: 6 }}>
                     <ChevronLeft size={18} />
                   </button>
@@ -450,7 +482,7 @@ export default function LedgerApp() {
                     style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 14px", background: C.debit, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                     <ArrowUpRight size={13} /> Debit (Out)
                   </button>
-                  <button type="button" onClick={() => requestDeleteAcc(activeAcc.id)} aria-label={`Delete ${activeAcc.name} account`}
+                  <button type="button" onClick={() => requestDeleteAcc(activeAcc.id)} aria-label={`Delete ${activeAcc.name} account`} className="iconbtn"
                     style={{ padding: "8px 10px", background: "none", border: `1px solid ${C.border}`, borderRadius: 7, cursor: "pointer", color: C.debit, display: "flex" }}>
                     <Trash2 size={13} />
                   </button>
@@ -463,7 +495,7 @@ export default function LedgerApp() {
                   { label: "Total Debit", val: activeStat?.debit || 0, color: C.debit },
                   { label: "Balance", val: Math.abs(activeStat?.balance || 0), color: (activeStat?.balance || 0) >= 0 ? C.credit : C.debit },
                 ].map((s, i) => (
-                  <div key={i} style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.lg}px ${SP.cardPad.md}px` }}>
+                  <div key={i} className="stat-card" style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.lg}px ${SP.cardPad.md}px` }}>
                     <div style={{ fontSize: 11, color: C.textSecondary, textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: SP.sm }}>{s.label}</div>
                     <div style={{ fontSize: 16, color: s.color, fontWeight: 700 }}>{RS}{fmtNum(s.val)}</div>
                   </div>
@@ -478,7 +510,7 @@ export default function LedgerApp() {
                   <div style={{ fontSize: 12 }}>Use the Credit / Debit buttons above to record entries</div>
                 </div>
               ) : (
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: SP.lg }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: T.body, marginTop: SP.lg }}>
                   <thead>
                     <tr style={{ background: C.tableHead }}>
                       {[
@@ -517,7 +549,7 @@ export default function LedgerApp() {
                           {fmtNum(tx.runBal)}
                         </td>
                         <td style={{ padding: `${SP.feet.t}px 8px`, textAlign: "right", borderBottom: `1px solid ${C.border}` }}>
-                          <button type="button" onClick={() => doDeleteTx(tx.id)} aria-label={`Delete transaction: ${tx.desc}`}
+                          <button type="button" onClick={() => doDeleteTx(tx.id)} aria-label={`Delete transaction: ${tx.desc}`} className="iconbtn"
                             style={{ ...resetBtn, color: C.iconGhost, padding: 3, borderRadius: 4 }}>
                             <Trash2 size={12} />
                           </button>
@@ -534,7 +566,7 @@ export default function LedgerApp() {
         {/* Charts */}
         {view === "charts" && (
           <Suspense fallback={
-            <div style={{ padding: `${SP.xl}px ${SP.pagePad}px`, flex: 1, color: C.textSecondary, fontSize: 13 }}>
+            <div className="view-in" style={{ padding: `${SP.xl}px ${SP.pagePad}px`, flex: 1, color: C.textSecondary, fontSize: 13 }}>
               <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: C.textPrimary }}>Charts</h1>
               <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 10 }}>
                 <div className="skel" style={{ height: 14, width: "100%" }} />
@@ -558,7 +590,7 @@ export default function LedgerApp() {
               style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, boxShadow: C.shadowModal }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
                 <div id="addtx-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Add entry — {activeAcc.name}</div>
-                <button type="button" onClick={closePanel} aria-label="Close" style={resetBtn}>
+                <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 6, padding: 3 }}>
                   <X size={17} color={C.textSecondary} />
                 </button>
               </div>
@@ -589,14 +621,14 @@ export default function LedgerApp() {
                   <input id={f.id} type={f.type} placeholder={f.placeholder} value={txForm[f.key]}
                     onChange={(e) => setTxForm((x) => ({ ...x, [f.key]: e.target.value }))}
                     onKeyDown={(e) => e.key === "Enter" && doAddTx()}
-                    style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, color: C.textPrimary, background: C.inputBg, boxSizing: "border-box", fontFamily: "inherit" }} />
+                    style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: T.body, color: C.textPrimary, background: C.inputBg, boxSizing: "border-box", fontFamily: "inherit" }} />
                 </div>
               ))}
 
               {err && <div style={{ color: C.debit, fontSize: 12, marginBottom: 12 }}>{err}</div>}
 
               <button type="button" onClick={doAddTx} className="press"
-                style={{ width: "100%", padding: 11, background: txForm.type === "credit" ? C.credit : C.debit, color: "#fff", border: "none", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                style={{ width: "100%", padding: 11, background: txForm.type === "credit" ? C.credit : C.debit, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
                 Add {txForm.type === "credit" ? "Credit" : "Debit"} Entry
               </button>
             </div>
@@ -608,7 +640,7 @@ export default function LedgerApp() {
               style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, boxShadow: C.shadowModal }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
                 <div id="addacc-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>New account</div>
-                <button type="button" onClick={closePanel} aria-label="Close" style={resetBtn}>
+                <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 6, padding: 3 }}>
                   <X size={17} color={C.textSecondary} />
                 </button>
               </div>
@@ -622,14 +654,14 @@ export default function LedgerApp() {
                   <input id={f.id} type={f.type} placeholder={f.placeholder} value={accForm[f.key]}
                     onChange={(e) => setAccForm((x) => ({ ...x, [f.key]: e.target.value }))}
                     onKeyDown={(e) => e.key === "Enter" && doAddAcc()}
-                    style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, color: C.textPrimary, background: C.inputBg, boxSizing: "border-box", fontFamily: "inherit" }} />
+                    style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: T.body, color: C.textPrimary, background: C.inputBg, boxSizing: "border-box", fontFamily: "inherit" }} />
                 </div>
               ))}
 
               {err && <div style={{ color: C.debit, fontSize: 12, marginBottom: 12 }}>{err}</div>}
 
               <button type="button" onClick={doAddAcc} className="press"
-                style={{ width: "100%", padding: 11, background: C.accent, color: "#fff", border: "none", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                style={{ width: "100%", padding: 11, background: C.accent, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
                 Create Account
               </button>
             </div>
@@ -643,16 +675,16 @@ export default function LedgerApp() {
                 <AlertTriangle size={22} color={C.debit} />
               </div>
               <div id="confirm-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Delete {confirmAcc.name}?</div>
-              <p id="confirm-desc" style={{ fontSize: 13, color: C.textSecondary, margin: "8px 0 20px" }}>
+              <p id="confirm-desc" style={{ fontSize: T.body, color: C.textSecondary, margin: "8px 0 20px" }}>
                 This permanently removes the account and its {confirmTxCount} entr{confirmTxCount !== 1 ? "ies" : "y"} from the ledger.
               </p>
               <div style={{ display: "flex", gap: 10 }}>
                 <button type="button" onClick={closePanel} id="confirm-cancel" className="press"
-                  style={{ flex: 1, padding: 11, background: C.bg, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                  style={{ flex: 1, padding: 11, background: C.bg, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
                   Keep
                 </button>
                 <button type="button" onClick={doConfirmDeleteAcc} id="confirm-ok" className="press"
-                  style={{ flex: 1, padding: 11, background: C.debit, color: "#fff", border: "none", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                  style={{ flex: 1, padding: 11, background: C.debit, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
                   Delete
                 </button>
               </div>

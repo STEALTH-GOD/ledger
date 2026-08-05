@@ -1,5 +1,4 @@
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -20,8 +19,7 @@ class Api:
 
 
 def _dist_index():
-    """Absolute path to the built UI. When frozen (onefile), it lives inside the
-    extracted bundle at sys._MEIPASS; in dev it's the repo's dist/."""
+    """Absolute path to the built UI index.html."""
     if getattr(sys, "frozen", False):
         return Path(sys._MEIPASS) / "dist" / "index.html"
     return Path(__file__).resolve().parent.parent / "dist" / "index.html"
@@ -29,15 +27,13 @@ def _dist_index():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dev", action="store_true", help="load Vite dev server instead of built dist/")
+    parser.add_argument("--dev", action="store_true",
+                        help="Load Vite dev server instead of built dist/")
     args = parser.parse_args()
 
     init()
 
-    if args.dev:
-        url = "http://localhost:5173"
-    else:
-        url = str(_dist_index())
+    url = "http://localhost:5173" if args.dev else str(_dist_index())
 
     webview.create_window(
         "Ledger Book",
@@ -47,7 +43,7 @@ def main():
         height=760,
         min_size=(860, 600),
     )
-    webview.start()
+    webview.start(debug=args.dev)
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ import {
   Cell,
 } from "recharts";
 import { BarChart2 } from "lucide-react";
-import { C, SP, ACCENT_COLORS, fmtNum } from "../theme.js";
+import { C, T, SP, ACCENT_COLORS, fmtNum } from "../theme.js";
 
 const RS = "Rs. ";
 
@@ -32,7 +32,7 @@ export default function ChartsView({ stats, chartData, onOpenAcc }) {
       ) : (
         <>
           <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "20px 24px", marginBottom: SP.lg }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: C.textPrimary, marginBottom: SP.lg }}>Monthly credit vs debit</div>
+            <div style={{ fontSize: T.body, fontWeight: 600, color: C.textPrimary, marginBottom: SP.lg }}>Monthly credit vs debit</div>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={chartData} barGap={3} barCategoryGap="28%">
                 <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F2" vertical={false} />
@@ -57,7 +57,7 @@ export default function ChartsView({ stats, chartData, onOpenAcc }) {
 
           {stats.length > 0 && (
             <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "20px 24px" }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: C.textPrimary, marginBottom: SP.lg }}>Account balances</div>
+              <div style={{ fontSize: T.body, fontWeight: 600, color: C.textPrimary, marginBottom: SP.lg }}>Account balances</div>
               <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
                 <PieChart width={160} height={160}>
                   <Pie data={stats.filter((a) => a.balance > 0)} cx={75} cy={75} innerRadius={45} outerRadius={72} dataKey="balance" paddingAngle={2}>

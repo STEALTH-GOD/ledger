@@ -44,15 +44,20 @@ def init():
 
 
 def load():
+    # SQL columns are snake_case; the UI reads camelCase keys (accountId, createdAt).
+    # Map back so load() returns the same shape save() accepts — keeps the round-trip consistent.
+    def account_row(r):
+        return {"id": r["id"], "name": r["name"], "currency": r["currency"], "opening": r["opening"], "createdAt": r["created_at"]}
+
+    def tx_row(r):
+        return {"id": r["id"], "accountId": r["account_id"], "type": r["type"], "amount": r["amount"], "desc": r["desc"], "date": r["date"], "createdAt": r["created_at"]}
+
     conn = _conn()
-    accounts = conn.execute("SELECT * FROM accounts").fetchall()
-    txs = conn.execute("SELECT * FROM transactions").fetchall()
+    accounts = [account_row(r) for r in conn.execute("SELECT * FROM accounts").fetchall()]
+    txs = [tx_row(r) for r in conn.execute("SELECT * FROM transactions").fetchall()]
     conn.close()
     return json.dumps(
-        {
-            "accounts": [dict(r) for r in accounts],
-            "transactions": [dict(r) for r in txs],
-        },
+        {"accounts": accounts, "transactions": txs},
         allow_nan=False,
     )
 

@@ -20,6 +20,11 @@ export const SP = {
 // Cool-neutral surfaces; warm amber #9E6210 is the sole identity accent.
 // Values chosen for WCAG AA wherever they appear as text (≥4.5:1 on their bg).
 
+// Type tokens — product register (dense app, money-centric).
+export const T = {
+  body: 14,        // inputs, buttons, table cells, empty states — legible but compact
+};
+
 export const C = {
   // surfaces
   bg: "#F5F6F7",
@@ -37,7 +42,7 @@ export const C = {
   sidebarText: "#A29AA9",
   sidebarLabel: "#9A93A5",
   sidebarHover: "#242127",
-  sidebarActiveBg: "#312E38",
+  sidebarActiveBg: "#3A2A16",  // warm amber-dark — carries the brand accent onto the active item
   sidebarActiveText: "#F0EDE8",
 
   // text
@@ -66,7 +71,8 @@ export const C = {
 };
 
 // Per-account avatar + pie-slice colors, cycled by index.
-export const ACCENT_COLORS = ["#7C6AF7", "#E8845A", "#3AADA0", "#D4609B", "#5B9CF6", "#F5A623", "#2BAC76"];
+// Curated OKLCH hues, all ≥4.25:1 on white (existing wheel had 5/7 under 3:1).
+export const ACCENT_COLORS = ["#B95B3D", "#A96B00", "#727F35", "#238A71", "#5376B8", "#9D5E94", "#8A4B30", "#005B8F"];
 
 // Shared number formatter (en-IN grouping, 2dp, sign-stripped).
 export const fmtNum = (n) =>
