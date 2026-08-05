@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import {
   Plus, Trash2, ArrowUpRight, ArrowDownLeft, LayoutDashboard, BarChart2,
-  BookOpen, ChevronLeft, ChevronRight, X, Wallet, AlertTriangle,
+  BookOpen, ChevronLeft, ChevronRight, X, Wallet, AlertTriangle, Download, Upload,
 } from "lucide-react";
-import { loadData, saveData } from "./api.js";
+import { loadData, saveData, exportXlsx, importXlsx } from "./api.js";
 import { C, T, SP, ACCENT_COLORS, fmtNum } from "./theme.js";
 
 // Code-split: recharts + lucide-heavy chart view loaded only when Charts is opened.
@@ -179,6 +179,7 @@ export default function LedgerApp() {
   const [confirmId, setConfirmId] = useState(null);
   const [err, setErr] = useState("");
   const [loaded, setLoaded] = useState(false);
+  const [notice, setNotice] = useState("");
   const saveTimer = useRef(null);
   const panelRef = useRef(null);
 
@@ -227,6 +228,13 @@ export default function LedgerApp() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [panel, activeId]);
+
+  // Auto-dismiss the export/import toast after ~3s.
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(""), 3000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   const activeAcc = useMemo(() => data.accounts.find((a) => a.id === activeId), [data.accounts, activeId]);
 
@@ -296,6 +304,75 @@ export default function LedgerApp() {
   };
 
   const doDeleteTx = (id) => setData((d) => ({ ...d, transactions: d.transactions.filter((t) => t.id !== id) }));
+
+  // ── Excel export / import ─────────────────────────────
+  // All-accounts export rows: per-account running balance across a date-sorted flat list.
+  const exportRows = useMemo(() => {
+    const bal = {};
+    data.accounts.forEach((a) => { bal[a.id] = a.opening || 0; });
+    const name = new Map(data.accounts.map((a) => [a.id, a.name]));
+    return [...data.transactions]
+      .sort((a, b) => new Date(a.date) - new Date(b.date) || (a.createdAt || "").localeCompare(b.createdAt || ""))
+      .map((t) => {
+        bal[t.accountId] += t.type === "credit" ? t.amount : -t.amount;
+        return {
+          date: t.date,
+          account: name.get(t.accountId) || "",
+          desc: t.desc,
+          credit: t.type === "credit" ? t.amount : 0,
+          debit: t.type === "debit" ? t.amount : 0,
+          balance: Math.round(bal[t.accountId] * 100) / 100,
+        };
+      });
+  }, [data]);
+
+  const doExport = async (scope) => {
+    const rows = scope === "all"
+      ? exportRows
+      : txsWithBalance.map((tx) => ({
+          date: tx.date,
+          account: activeAcc?.name || "",
+          desc: tx.desc,
+          credit: tx.type === "credit" ? tx.amount : 0,
+          debit: tx.type === "debit" ? tx.amount : 0,
+          balance: tx.runBal,
+        }));
+    const base = (activeAcc?.name || "account").replace(/[^\w]+/g, "-").toLowerCase();
+    const file = scope === "all" ? `ledger-${todayStr()}.xlsx` : `ledger-${base}-${todayStr()}.xlsx`;
+    setNotice("Exporting…");
+    try {
+      const msg = await exportXlsx({ rows, defaultName: file });
+      setNotice(msg && msg.startsWith("ERROR:") ? msg : (msg || "Exported"));
+          } catch (e) { setNotice(`Export failed: ${e?.message || e}`); }
+  };
+
+  const doImport = async () => {
+    let rows;
+    try { rows = await importXlsx(); }
+    catch { setErr("Import failed"); return; }
+    if (!rows || rows.length === 0) return;
+    const nameKey = (s) => (s || "").trim().toLowerCase();
+    const accs = [...data.accounts];
+    const byKey = new Map(accs.map((a) => [nameKey(a.name), a]));
+    const imported = [];
+    let skipped = 0;
+    rows.forEach((r) => {
+      const accName = (r.account || "").trim();
+      if (!accName) { skipped++; return; }
+      let acc = byKey.get(nameKey(accName));
+      if (!acc) {
+        acc = { id: uid(), name: accName, currency: "NPR", opening: 0, createdAt: new Date().toISOString() };
+        accs.push(acc);
+        byKey.set(nameKey(accName), acc);
+      }
+      const dup = data.transactions.some((t) =>
+        t.accountId === acc.id && t.date === r.date && t.desc === r.desc && t.amount === r.amount);
+      if (dup) { skipped++; return; }
+      imported.push({ id: uid(), accountId: acc.id, type: r.type, amount: r.amount, desc: r.desc, date: r.date, createdAt: new Date().toISOString() });
+    });
+    setData({ accounts: accs, transactions: [...data.transactions, ...imported] });
+    setNotice(`${imported.length} imported, ${skipped} skipped`);
+  };
 
   const requestDeleteAcc = (id) => { setConfirmId(id); setErr(""); setPanel("confirm-del"); };
 
@@ -377,10 +454,20 @@ export default function LedgerApp() {
           })}
         </nav>
 
-        <div style={{ padding: "12px 14px 16px", borderTop: `1px solid ${C.sidebarBorder}` }}>
+        <div style={{ padding: "12px 14px 16px", borderTop: `1px solid ${C.sidebarBorder}`, display: "flex", flexDirection: "column", gap: 6 }}>
           <button type="button" className="scta" onClick={() => { openPanel("add-acc"); setView("dashboard"); }}>
             <Plus size={13} /> New Account
           </button>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button type="button" onClick={() => doExport("all")} aria-label="Export all accounts to Excel"
+              className="press" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px", background: "rgba(255,255,255,0.06)", color: C.sidebarText, border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+              <Download size={13} /> Export
+            </button>
+            <button type="button" onClick={doImport} aria-label="Import from Excel"
+              className="press" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px", background: "rgba(255,255,255,0.06)", color: C.sidebarText, border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+              <Upload size={13} /> Import
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -481,6 +568,10 @@ export default function LedgerApp() {
                   <button type="button" onClick={() => openPanel("add-tx", "debit")} className="press"
                     style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 14px", background: C.debit, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                     <ArrowUpRight size={13} /> Debit (Out)
+                  </button>
+                  <button type="button" onClick={() => doExport(activeAcc.id)} aria-label={`Export ${activeAcc.name} to Excel`} className="iconbtn"
+                    style={{ padding: "8px 10px", background: "none", border: `1px solid ${C.border}`, borderRadius: 7, cursor: "pointer", color: C.textSecondary, display: "flex" }}>
+                    <Download size={13} />
                   </button>
                   <button type="button" onClick={() => requestDeleteAcc(activeAcc.id)} aria-label={`Delete ${activeAcc.name} account`} className="iconbtn"
                     style={{ padding: "8px 10px", background: "none", border: `1px solid ${C.border}`, borderRadius: 7, cursor: "pointer", color: C.debit, display: "flex" }}>
@@ -690,6 +781,14 @@ export default function LedgerApp() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Export/import toast */}
+      {notice && (
+        <div role="status" aria-live="polite" className="dialog-pop"
+          style={{ position: "fixed", top: SP.lg, right: SP.lg, zIndex: 300, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 16px", fontSize: 13, color: C.textPrimary, boxShadow: C.shadowModal }}>
+          {notice}
         </div>
       )}
     </div>

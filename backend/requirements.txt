@@ -1,2 +1,4 @@
 pywebview>=5.1
+openpyxl>=3.1
+xlrd>=2.0.1  # legacy .xls import
 pyinstaller>=6.0  # dev/build only
