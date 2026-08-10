@@ -56,6 +56,13 @@ export async function exportXlsx({ rows, defaultName }) {
   return `Downloaded ${rows.length} rows → ${defaultName}`;
 }
 
+export async function exportPdf({ rows, summary, single, defaultName }) {
+  const api = await getApi();
+  if (api) return api.export_pdf(JSON.stringify({ rows, summary, single, defaultName }));
+  // ponytail: no SheetJS-style fallback — no JS PDF dep in browser dev.
+  return "ERROR: PDF export needs the desktop app (no PDF in browser dev).";
+}
+
 // Packaged app: native dialog. Browser dev: file input, reads real .xlsx via SheetJS.
 export async function importXlsx() {
   const api = await getApi();

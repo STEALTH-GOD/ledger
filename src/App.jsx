@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import {
   Plus, Trash2, ArrowUpRight, ArrowDownLeft, LayoutDashboard, BarChart2,
-  BookOpen, ChevronLeft, ChevronRight, X, Wallet, AlertTriangle, Download, Upload,
+  BookOpen, ChevronLeft, ChevronRight, X, Wallet, AlertTriangle, Download, Upload, Pencil, FileSpreadsheet, FileText,
 } from "lucide-react";
-import { loadData, saveData, exportXlsx, importXlsx } from "./api.js";
+import { loadData, saveData, exportXlsx, exportPdf, importXlsx } from "./api.js";
 import { C, T, SP, ACCENT_COLORS, fmtNum } from "./theme.js";
 
 // Code-split: recharts + lucide-heavy chart view loaded only when Charts is opened.
@@ -173,10 +173,13 @@ export default function LedgerApp() {
   const [data, setData] = useState({ accounts: [], transactions: [] });
   const [view, setView] = useState("dashboard");
   const [activeId, setActiveId] = useState(null);
-  const [panel, setPanel] = useState(null); // "add-tx" | "add-acc" | "confirm-del"
+  const [panel, setPanel] = useState(null); // "add-tx" | "add-acc" | "confirm-del" | "export"
+  const [exportScope, setExportScope] = useState("all"); // "all" | account id — captured before opening chooser
+  const [editTx, setEditTx] = useState(null); // transaction being edited, null = new entry
   const [txForm, setTxForm] = useState({ type: "credit", amount: "", desc: "", date: todayStr() });
   const [accForm, setAccForm] = useState({ name: "", opening: "" });
   const [confirmId, setConfirmId] = useState(null);
+  const [confirmTx, setConfirmTx] = useState(null); // transaction pending deletion confirm
   const [err, setErr] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [notice, setNotice] = useState("");
@@ -206,10 +209,10 @@ export default function LedgerApp() {
   // Focus first field, trap Tab within the dialog, ESC to close.
   useEffect(() => {
     if (!panel) return;
-    const initial = panel === "add-acc" ? "acc-name" : panel === "add-tx" ? "tx-amount" : "confirm-cancel";
+    const initial = panel === "add-acc" ? "acc-name" : panel === "add-tx" ? "tx-amount" : panel === "export" ? "export-pdf" : "confirm-cancel";
     document.getElementById(initial)?.focus();
     const onKey = (e) => {
-      if (e.key === "Escape") { setPanel(null); setErr(""); setConfirmId(null); }
+      if (e.key === "Escape") { setPanel(null); setErr(""); setConfirmId(null); setConfirmTx(null); setEditTx(null); }
       if (e.key !== "Tab") return;
       const node = panelRef.current;
       if (!node) return;
@@ -280,7 +283,7 @@ export default function LedgerApp() {
 
   const openAcc = (id) => { setActiveId(id); setView("account"); setPanel(null); };
 
-  const closePanel = () => { setPanel(null); setErr(""); setConfirmId(null); };
+  const closePanel = () => { setPanel(null); setErr(""); setConfirmId(null); setConfirmTx(null); setEditTx(null); };
 
   const doAddAcc = () => {
     const name = accForm.name.trim();
@@ -294,16 +297,33 @@ export default function LedgerApp() {
   };
 
   const doAddTx = () => {
-    const amount = parseFloat(txForm.amount);
-    if (!amount || amount <= 0) { setErr("Enter a valid amount"); return; }
+    const amount = parseFloat(txForm.amount) || 0;
+    if (amount < 0) { setErr("Enter a valid amount"); return; }
     if (!txForm.desc.trim()) { setErr("Description is required"); return; }
-    const tx = { id: uid(), accountId: activeId, type: txForm.type, amount, desc: txForm.desc.trim(), date: txForm.date, createdAt: new Date().toISOString() };
-    setData((d) => ({ ...d, transactions: [...d.transactions, tx] }));
+    const now = new Date().toISOString();
+    if (editTx) {
+      setData((d) => ({ ...d, transactions: d.transactions.map((t) =>
+        t.id === editTx.id
+          ? { ...t, type: txForm.type, amount, desc: txForm.desc.trim(), date: txForm.date }
+          : t
+      ) }));
+    } else {
+      const tx = { id: uid(), accountId: activeId, type: txForm.type, amount, desc: txForm.desc.trim(), date: txForm.date, createdAt: now };
+      setData((d) => ({ ...d, transactions: [...d.transactions, tx] }));
+    }
     setTxForm({ type: "credit", amount: "", desc: "", date: todayStr() });
+    setEditTx(null);
     setErr(""); setPanel(null);
   };
 
+  const requestDeleteTx = (tx) => { setConfirmTx(tx); setErr(""); setPanel("confirm-del-tx"); };
+
   const doDeleteTx = (id) => setData((d) => ({ ...d, transactions: d.transactions.filter((t) => t.id !== id) }));
+
+  const doConfirmDeleteTx = () => {
+    if (confirmTx) setData((d) => ({ ...d, transactions: d.transactions.filter((t) => t.id !== confirmTx.id) }));
+    closePanel();
+  };
 
   // ── Excel export / import ─────────────────────────────
   // All-accounts export rows: per-account running balance across a date-sorted flat list.
@@ -326,7 +346,12 @@ export default function LedgerApp() {
       });
   }, [data]);
 
-  const doExport = async (scope) => {
+  const fmtMoney = (n) => `${RS}${fmtNum(n)}`;
+
+  // Shared per-export data: flat rows (xlsx numbers) + display mirror (pdf strings)
+  // + one-line summary (grand totals for "all", this account's for a single account).
+  const buildExportPayload = (scope) => {
+    const single = scope !== "all";
     const rows = scope === "all"
       ? exportRows
       : txsWithBalance.map((tx) => ({
@@ -337,14 +362,39 @@ export default function LedgerApp() {
           debit: tx.type === "debit" ? tx.amount : 0,
           balance: tx.runBal,
         }));
-    const base = (activeAcc?.name || "account").replace(/[^\w]+/g, "-").toLowerCase();
-    const file = scope === "all" ? `ledger-${todayStr()}.xlsx` : `ledger-${base}-${todayStr()}.xlsx`;
-    setNotice("Exporting…");
-    try {
-      const msg = await exportXlsx({ rows, defaultName: file });
-      setNotice(msg && msg.startsWith("ERROR:") ? msg : (msg || "Exported"));
-          } catch (e) { setNotice(`Export failed: ${e?.message || e}`); }
+    // PDF rows: money as display strings (fpdf2 calls .encode() on cells), "" for empty side.
+    const pdfRows = rows.map((r) => ({
+      date: r.date,
+      account: r.account,
+      desc: r.desc,
+      credit: r.credit ? fmtMoney(r.credit) : "",
+      debit: r.debit ? fmtMoney(r.debit) : "",
+      balance: fmtMoney(r.balance),
+    }));
+    const sum = scope === "all" ? totals : stats.find((a) => a.id === scope);
+    const summary = sum
+      ? { credit: fmtMoney(sum.credit), debit: fmtMoney(sum.debit), balance: fmtMoney(sum.balance) }
+      : null;
+    return { rows, pdfRows, summary, single };
   };
+
+  // shared export runner: builds payload + file name, calls the api fn, toasts result.
+  const runExport = async (scope, fmt) => {
+    const { rows, pdfRows, summary, single } = buildExportPayload(scope);
+    const base = (activeAcc?.name || "account").replace(/[^\w]+/g, "-").toLowerCase();
+    const file = scope === "all"
+      ? `ledger-${todayStr()}.${fmt === "pdf" ? "pdf" : "xlsx"}`
+      : `ledger-${base}-${todayStr()}.${fmt === "pdf" ? "pdf" : "xlsx"}`;
+    setNotice(fmt === "pdf" ? "Exporting PDF…" : "Exporting…");
+    try {
+      const msg = fmt === "pdf"
+        ? await exportPdf({ rows: pdfRows, summary, single, defaultName: file })
+        : await exportXlsx({ rows, defaultName: file });
+      setNotice(msg && msg.startsWith("ERROR:") ? msg : (msg || "Exported"));
+    } catch (e) { setNotice(`Export failed: ${e?.message || e}`); }
+  };
+
+  const openExport = (scope) => { setExportScope(scope); setErr(""); setPanel("export"); };
 
   const doImport = async () => {
     let rows;
@@ -386,9 +436,15 @@ export default function LedgerApp() {
   };
 
   const openPanel = (type, txType = "credit") => {
-    setErr("");
+    setErr(""); setEditTx(null);
     if (type === "add-tx") setTxForm((f) => ({ ...f, type: txType, amount: "", desc: "" }));
     setPanel(type);
+  };
+
+  const openEditTx = (tx) => {
+    setErr(""); setEditTx(tx);
+    setTxForm({ type: tx.type, amount: tx.amount, desc: tx.desc, date: tx.date });
+    setPanel("add-tx");
   };
 
   if (!loaded) return (
@@ -459,7 +515,7 @@ export default function LedgerApp() {
             <Plus size={13} /> New Account
           </button>
           <div style={{ display: "flex", gap: 6 }}>
-            <button type="button" onClick={() => doExport("all")} aria-label="Export all accounts to Excel"
+            <button type="button" onClick={() => openExport("all")} aria-label="Export all accounts"
               className="press" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px", background: "rgba(255,255,255,0.06)", color: C.sidebarText, border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
               <Download size={13} /> Export
             </button>
@@ -569,7 +625,7 @@ export default function LedgerApp() {
                     style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 14px", background: C.debit, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                     <ArrowUpRight size={13} /> Debit (Out)
                   </button>
-                  <button type="button" onClick={() => doExport(activeAcc.id)} aria-label={`Export ${activeAcc.name} to Excel`} className="iconbtn"
+                  <button type="button" onClick={() => openExport(activeAcc.id)} aria-label={`Export ${activeAcc.name}`} className="iconbtn"
                     style={{ padding: "8px 10px", background: "none", border: `1px solid ${C.border}`, borderRadius: 7, cursor: "pointer", color: C.textSecondary, display: "flex" }}>
                     <Download size={13} />
                   </button>
@@ -610,7 +666,7 @@ export default function LedgerApp() {
                         { label: `Credit (${RS.trim()})`, align: "right", w: "130px" },
                         { label: `Debit (${RS.trim()})`, align: "right", w: "130px" },
                         { label: "Balance", align: "right", w: "130px" },
-                        { label: "", align: "right", w: "36px" },
+                        { label: "", align: "right", w: "64px" },
                       ].map((h, i) => (
                         <th key={i} style={{ padding: `${SP.feet.t}px 12px`, textAlign: h.align, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.7px", color: C.textSecondary, borderBottom: `2px solid ${C.border}`, width: h.w, fontWeight: 600, whiteSpace: "nowrap" }}>
                           {h.label}
@@ -640,10 +696,16 @@ export default function LedgerApp() {
                           {fmtNum(tx.runBal)}
                         </td>
                         <td style={{ padding: `${SP.feet.t}px 8px`, textAlign: "right", borderBottom: `1px solid ${C.border}` }}>
-                          <button type="button" onClick={() => doDeleteTx(tx.id)} aria-label={`Delete transaction: ${tx.desc}`} className="iconbtn"
-                            style={{ ...resetBtn, color: C.iconGhost, padding: 3, borderRadius: 4 }}>
-                            <Trash2 size={12} />
-                          </button>
+                          <div style={{ display: "flex", gap: 2, justifyContent: "flex-end" }}>
+                            <button type="button" onClick={() => openEditTx(tx)} aria-label={`Edit transaction: ${tx.desc}`} className="iconbtn"
+                              style={{ ...resetBtn, color: C.iconGhost, padding: 4, borderRadius: 4 }}>
+                              <Pencil size={13} />
+                            </button>
+                            <button type="button" onClick={() => requestDeleteTx(tx)} aria-label={`Delete transaction: ${tx.desc}`} className="iconbtn"
+                              style={{ ...resetBtn, color: C.iconGhost, padding: 4, borderRadius: 4 }}>
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -680,7 +742,7 @@ export default function LedgerApp() {
             <div role="dialog" aria-modal="true" aria-labelledby="addtx-title" className="dialog-pop"
               style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, boxShadow: C.shadowModal }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-                <div id="addtx-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Add entry — {activeAcc.name}</div>
+                <div id="addtx-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>{editTx ? "Edit entry" : "Add entry"} — {activeAcc.name}</div>
                 <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 6, padding: 3 }}>
                   <X size={17} color={C.textSecondary} />
                 </button>
@@ -720,7 +782,7 @@ export default function LedgerApp() {
 
               <button type="button" onClick={doAddTx} className="press"
                 style={{ width: "100%", padding: 11, background: txForm.type === "credit" ? C.credit : C.debit, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
-                Add {txForm.type === "credit" ? "Credit" : "Debit"} Entry
+                {editTx ? "Save Changes" : `Add ${txForm.type === "credit" ? "Credit" : "Debit"} Entry`}
               </button>
             </div>
           )}
@@ -755,6 +817,60 @@ export default function LedgerApp() {
                 style={{ width: "100%", padding: 11, background: C.accent, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
                 Create Account
               </button>
+            </div>
+          )}
+
+          {/* export — format chooser */}
+          {panel === "export" && (
+            <div role="dialog" aria-modal="true" aria-labelledby="export-title" className="dialog-pop"
+              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, boxShadow: C.shadowModal }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <div id="export-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Export</div>
+                <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 6, padding: 3 }}>
+                  <X size={17} color={C.textSecondary} />
+                </button>
+              </div>
+              <p style={{ margin: "0 0 18px", fontSize: 13, color: C.textSecondary }}>
+                {exportScope === "all"
+                  ? "All accounts"
+                  : `Account — ${data.accounts.find((a) => a.id === exportScope)?.name || ""}`}
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <button type="button" onClick={() => { runExport(exportScope, "xlsx"); closePanel(); }} id="export-xlsx" className="press"
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", background: C.bg, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 9, fontSize: T.body, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                  <FileSpreadsheet size={18} color={C.accent} />
+                  <span>Excel — .xlsx</span>
+                </button>
+                <button type="button" onClick={() => { runExport(exportScope, "pdf"); closePanel(); }} id="export-pdf" className="press"
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", background: C.bg, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 9, fontSize: T.body, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                  <FileText size={18} color={C.debit} />
+                  <span>PDF — print-ready report</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* confirm-del-tx */}
+          {panel === "confirm-del-tx" && confirmTx && (
+            <div role="alertdialog" aria-modal="true" aria-labelledby="confirmtx-title" aria-describedby="confirmtx-desc" className="dialog-pop"
+              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, boxShadow: C.shadowModal, textAlign: "center" }}>
+              <div style={{ width: 48, height: 48, background: C.debitBg, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px" }}>
+                <AlertTriangle size={22} color={C.debit} />
+              </div>
+              <div id="confirmtx-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Delete this entry?</div>
+              <p id="confirmtx-desc" style={{ fontSize: T.body, color: C.textSecondary, margin: "8px 0 20px" }}>
+                {confirmTx.desc} · {RS}{fmtNum(confirmTx.amount)} on {new Date(confirmTx.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+              </p>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button type="button" onClick={closePanel} id="confirm-cancel" className="press"
+                  style={{ flex: 1, padding: 11, background: C.bg, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
+                  Keep
+                </button>
+                <button type="button" onClick={doConfirmDeleteTx} id="confirm-ok" className="press"
+                  style={{ flex: 1, padding: 11, background: C.debit, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
+                  Delete
+                </button>
+              </div>
             </div>
           )}
 

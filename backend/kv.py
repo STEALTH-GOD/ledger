@@ -1,14 +1,23 @@
 import json
+import os
+import shutil
 import sqlite3
 import sys
 from pathlib import Path
 
 
 def db_path():
-    """Path to ledger.db. Beside the exe when frozen (user-writable), else project dir."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent / "ledger.db"
-    return Path(__file__).resolve().parent.parent / "ledger.db"
+    """Path to ledger.db. Frozen: %APPDATA%/LedgerBook/ledger.db so PyInstaller rebuilds —
+    which wipe dist/ and everything in it — never touch user data. Dev: project dir."""
+    if not getattr(sys, "frozen", False):
+        return Path(__file__).resolve().parent.parent / "ledger.db"
+    p = Path(os.environ.get("APPDATA", str(Path(sys.executable).parent))) / "LedgerBook" / "ledger.db"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    # Old placement kept the db beside the exe; migrate it once so existing data survives.
+    old = Path(sys.executable).parent / "ledger.db"
+    if old.exists() and not p.exists():
+        shutil.move(str(old), str(p))
+    return p
 
 
 def _conn():

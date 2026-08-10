@@ -7,6 +7,7 @@ import webview
 
 from kv import init, load, save
 from xlsx import build_workbook, parse_workbook, parse_legacy_xls
+from pdf import build_pdf
 
 import traceback
 
@@ -45,6 +46,21 @@ class Api:
             return str(out)
         except Exception as e:
             _log_error("export_xlsx", e)
+            return f"ERROR: {e}"
+
+    def export_pdf(self, payload_str):
+        try:
+            data = json.loads(payload_str)
+            chosen = self._win().create_file_dialog(
+                webview.SAVE_DIALOG, save_filename=data.get("defaultName", "ledger.pdf"),
+                file_types=("PDF Files (*.pdf)", "All Files (*.*)"))
+            if not chosen:
+                return ""
+            path = chosen[0] if isinstance(chosen, (tuple, list)) else chosen
+            Path(path).write_bytes(build_pdf(data["rows"], data.get("summary"), data.get("single", False)).getvalue())
+            return str(path)
+        except Exception as e:
+            _log_error("export_pdf", e)
             return f"ERROR: {e}"
 
     def import_xlsx(self):
