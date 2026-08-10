@@ -173,11 +173,14 @@ export default function LedgerApp() {
   const [data, setData] = useState({ accounts: [], transactions: [] });
   const [view, setView] = useState("dashboard");
   const [activeId, setActiveId] = useState(null);
-  const [panel, setPanel] = useState(null); // "add-tx" | "add-acc" | "confirm-del" | "export"
+  const [panel, setPanel] = useState(null); // "add-tx" | "add-acc" | "confirm-del" | "export" | "import-acc" | "rename-acc"
   const [exportScope, setExportScope] = useState("all"); // "all" | account id — captured before opening chooser
+  const [importRows, setImportRows] = useState(null);   // parsed rows awaiting account-name dialog
+  const [importName, setImportName] = useState("");
   const [editTx, setEditTx] = useState(null); // transaction being edited, null = new entry
   const [txForm, setTxForm] = useState({ type: "credit", amount: "", desc: "", date: todayStr() });
   const [accForm, setAccForm] = useState({ name: "", opening: "" });
+  const [rename, setRename] = useState(null); // { id, name } — account being renamed
   const [confirmId, setConfirmId] = useState(null);
   const [confirmTx, setConfirmTx] = useState(null); // transaction pending deletion confirm
   const [err, setErr] = useState("");
@@ -209,10 +212,16 @@ export default function LedgerApp() {
   // Focus first field, trap Tab within the dialog, ESC to close.
   useEffect(() => {
     if (!panel) return;
-    const initial = panel === "add-acc" ? "acc-name" : panel === "add-tx" ? "tx-amount" : panel === "export" ? "export-pdf" : "confirm-cancel";
+    const initial =
+      panel === "add-acc" ? "acc-name"
+      : panel === "add-tx" ? "tx-amount"
+      : panel === "export" ? "export-pdf"
+      : panel === "import-acc" ? "import-name"
+      : panel === "rename-acc" ? "rename-name"
+      : "confirm-cancel";
     document.getElementById(initial)?.focus();
     const onKey = (e) => {
-      if (e.key === "Escape") { setPanel(null); setErr(""); setConfirmId(null); setConfirmTx(null); setEditTx(null); }
+      if (e.key === "Escape") { setPanel(null); setErr(""); setConfirmId(null); setConfirmTx(null); setEditTx(null); setImportRows(null); setImportName(""); setRename(null); }
       if (e.key !== "Tab") return;
       const node = panelRef.current;
       if (!node) return;
@@ -283,7 +292,7 @@ export default function LedgerApp() {
 
   const openAcc = (id) => { setActiveId(id); setView("account"); setPanel(null); };
 
-  const closePanel = () => { setPanel(null); setErr(""); setConfirmId(null); setConfirmTx(null); setEditTx(null); };
+  const closePanel = () => { setPanel(null); setErr(""); setConfirmId(null); setConfirmTx(null); setEditTx(null); setImportRows(null); setImportName(""); setRename(null); };
 
   const doAddAcc = () => {
     const name = accForm.name.trim();
@@ -401,30 +410,58 @@ export default function LedgerApp() {
     try { rows = await importXlsx(); }
     catch { setErr("Import failed"); return; }
     if (!rows || rows.length === 0) return;
+    // One dialog: ask which account the imported rows belong to, then import all into it.
+    const distinct = [...new Set(rows.map((r) => (r.account || "").trim()))].filter(Boolean);
+    const nameKey = (s) => (s || "").trim().toLowerCase();
+    const existing = data.accounts.find((a) => nameKey(a.name) === nameKey(distinct[0]));
+    setImportName(existing ? existing.name : (distinct[0] || ""));
+    setImportRows(rows);
+    setErr(""); setPanel("import-acc");
+  };
+
+  const doConfirmImport = () => {
+    const target = (importName || "").trim();
+    if (!target) { setErr("Account name is required"); return; }
     const nameKey = (s) => (s || "").trim().toLowerCase();
     const accs = [...data.accounts];
-    const byKey = new Map(accs.map((a) => [nameKey(a.name), a]));
+    let acc = accs.find((a) => nameKey(a.name) === nameKey(target));
+    if (!acc) {
+      acc = { id: uid(), name: target, currency: "NPR", opening: 0, createdAt: new Date().toISOString() };
+      accs.push(acc);
+    }
     const imported = [];
     let skipped = 0;
-    rows.forEach((r) => {
-      const accName = (r.account || "").trim();
-      if (!accName) { skipped++; return; }
-      let acc = byKey.get(nameKey(accName));
-      if (!acc) {
-        acc = { id: uid(), name: accName, currency: "NPR", opening: 0, createdAt: new Date().toISOString() };
-        accs.push(acc);
-        byKey.set(nameKey(accName), acc);
-      }
+    importRows.forEach((r) => {
       const dup = data.transactions.some((t) =>
         t.accountId === acc.id && t.date === r.date && t.desc === r.desc && t.amount === r.amount);
       if (dup) { skipped++; return; }
       imported.push({ id: uid(), accountId: acc.id, type: r.type, amount: r.amount, desc: r.desc, date: r.date, createdAt: new Date().toISOString() });
     });
     setData({ accounts: accs, transactions: [...data.transactions, ...imported] });
+    setImportRows(null); setImportName(""); closePanel();
     setNotice(`${imported.length} imported, ${skipped} skipped`);
   };
 
   const requestDeleteAcc = (id) => { setConfirmId(id); setErr(""); setPanel("confirm-del"); };
+
+  const requestRenameAcc = (id) => {
+    const acc = data.accounts.find((a) => a.id === id);
+    if (!acc) return;
+    setErr("");
+    setRename({ id, name: acc.name });
+    setPanel("rename-acc");
+  };
+
+  const doRenameAcc = () => {
+    const target = (rename?.name || "").trim();
+    if (!target) { setErr("Account name is required"); return; }
+    const clash = data.accounts.some(
+      (a) => a.id !== rename.id && a.name.trim().toLowerCase() === target.toLowerCase());
+    if (clash) { setErr("An account with this name already exists"); return; }
+    setData((d) => ({ ...d, accounts: d.accounts.map((a) =>
+      a.id === rename.id ? { ...a, name: target } : a) }));
+    setRename(null); setErr(""); setPanel(null);
+  };
 
   // Called from the confirm dialog's "Delete" action.
   const doConfirmDeleteAcc = () => {
@@ -571,29 +608,36 @@ export default function LedgerApp() {
                 <div style={{ fontSize: 13, fontWeight: 600, color: C.textPrimary, marginBottom: 10 }}>All accounts</div>
                 <div className="stagger" style={{ display: "flex", flexDirection: "column", gap: SP.sm }}>
                   {stats.map((acc, i) => (
-                    <button key={acc.id} type="button" onClick={() => openAcc(acc.id)} className="acc-row"
-                      style={{ "--i": i, ...resetBtn, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.md}px ${SP.cardPad.md}px`, cursor: "pointer", width: "100%", alignItems: "center", gap: SP.md }}>
-                      <div style={{ width: 38, height: 38, borderRadius: "50%", background: ACCENT_COLORS[i % ACCENT_COLORS.length] + "18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: ACCENT_COLORS[i % ACCENT_COLORS.length], flexShrink: 0 }}>
-                        {acc.name.charAt(0).toUpperCase()}
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 14, fontWeight: 600, color: C.textPrimary }}>{acc.name}</div>
-                        <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2 }}>
-                          {acc.count} entr{acc.count !== 1 ? "ies" : "y"}
+                    <div key={acc.id} className="acc-row"
+                      style={{ "--i": i, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.md}px ${SP.cardPad.md}px`, width: "100%", display: "flex", alignItems: "center", gap: SP.md }}>
+                      <button type="button" onClick={() => openAcc(acc.id)}
+                        style={{ ...resetBtn, flex: 1, minWidth: 0, gap: SP.md, alignItems: "center" }}>
+                        <div style={{ width: 38, height: 38, borderRadius: "50%", background: ACCENT_COLORS[i % ACCENT_COLORS.length] + "18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: ACCENT_COLORS[i % ACCENT_COLORS.length], flexShrink: 0 }}>
+                          {acc.name.charAt(0).toUpperCase()}
                         </div>
-                      </div>
-                      <div style={{ textAlign: "right" }}>
-                        <div style={{ fontSize: 16, fontWeight: 700, color: acc.balance >= 0 ? C.credit : C.debit }}>
-                          {RS}{fmtNum(acc.balance)}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 14, fontWeight: 600, color: C.textPrimary }}>{acc.name}</div>
+                          <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2 }}>
+                            {acc.count} entr{acc.count !== 1 ? "ies" : "y"}
+                          </div>
                         </div>
-                        <div style={{ fontSize: 11, color: C.textSecondary, marginTop: 2 }}>
-                          <span style={{ color: C.credit }}>+{fmtNum(acc.credit)}</span>
-                          <span style={{ margin: "0 4px" }}>/</span>
-                          <span style={{ color: C.debit }}>-{fmtNum(acc.debit)}</span>
+                        <div style={{ textAlign: "right" }}>
+                          <div style={{ fontSize: 16, fontWeight: 700, color: acc.balance >= 0 ? C.credit : C.debit }}>
+                            {RS}{fmtNum(acc.balance)}
+                          </div>
+                          <div style={{ fontSize: 11, color: C.textSecondary, marginTop: 2 }}>
+                            <span style={{ color: C.credit }}>+{fmtNum(acc.credit)}</span>
+                            <span style={{ margin: "0 4px" }}>/</span>
+                            <span style={{ color: C.debit }}>-{fmtNum(acc.debit)}</span>
+                          </div>
                         </div>
-                      </div>
-                      <ChevronRight size={15} color={C.iconMuted} />
-                    </button>
+                        <ChevronRight size={15} color={C.iconMuted} />
+                      </button>
+                      <button type="button" onClick={() => requestRenameAcc(acc.id)} aria-label={`Rename ${acc.name}`} className="iconbtn"
+                        style={{ ...resetBtn, color: C.textSecondary, padding: 4, borderRadius: 6, flexShrink: 0 }}>
+                        <Pencil size={15} color={C.iconMuted} />
+                      </button>
+                    </div>
                   ))}
                 </div>
               </>
@@ -816,6 +860,59 @@ export default function LedgerApp() {
               <button type="button" onClick={doAddAcc} className="press"
                 style={{ width: "100%", padding: 11, background: C.accent, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
                 Create Account
+              </button>
+            </div>
+          )}
+
+          {/* rename-acc */}
+          {panel === "rename-acc" && rename && (
+            <div role="dialog" aria-modal="true" aria-labelledby="rename-acc-title" className="dialog-pop"
+              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, boxShadow: C.shadowModal }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+                <div id="rename-acc-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Rename account</div>
+                <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 6, padding: 3 }}>
+                  <X size={17} color={C.textSecondary} />
+                </button>
+              </div>
+              <div style={{ marginBottom: 14 }}>
+                <label htmlFor="rename-name" style={{ display: "block", fontSize: 11, color: C.textSecondary, textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 5 }}>Account name</label>
+                <input id="rename-name" type="text" placeholder="e.g. Cash, Savings, Business…" value={rename.name}
+                  onChange={(e) => setRename((r) => ({ ...r, name: e.target.value }))}
+                  onKeyDown={(e) => e.key === "Enter" && doRenameAcc()}
+                  style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: T.body, color: C.textPrimary, background: C.inputBg, boxSizing: "border-box", fontFamily: "inherit" }} />
+              </div>
+              {err && <div style={{ color: C.debit, fontSize: 12, marginBottom: 12 }}>{err}</div>}
+              <button type="button" onClick={doRenameAcc} id="rename-ok" className="press"
+                style={{ width: "100%", padding: 11, background: C.accent, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
+                Save
+              </button>
+            </div>
+          )}
+
+          {/* import-acc — choose account for imported rows */}
+          {panel === "import-acc" && (
+            <div role="dialog" aria-modal="true" aria-labelledby="importacc-title" className="dialog-pop"
+              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, boxShadow: C.shadowModal }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+                <div id="importacc-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Import to account</div>
+                <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 6, padding: 3 }}>
+                  <X size={17} color={C.textSecondary} />
+                </button>
+              </div>
+              <div style={{ marginBottom: 14 }}>
+                <label htmlFor="import-name" style={{ display: "block", fontSize: 11, color: C.textSecondary, textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 5 }}>Account name</label>
+                <input id="import-name" type="text" placeholder="e.g. Cash, Savings, Business…" value={importName}
+                  onChange={(e) => setImportName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && doConfirmImport()}
+                  style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: T.body, color: C.textPrimary, background: C.inputBg, boxSizing: "border-box", fontFamily: "inherit" }} />
+              </div>
+              <p style={{ margin: "0 0 14px", fontSize: 12, color: C.textSecondary }}>
+                {importRows ? importRows.length : 0} rows will import into this account. Existing account with same name will be reused.
+              </p>
+              {err && <div style={{ color: C.debit, fontSize: 12, marginBottom: 12 }}>{err}</div>}
+              <button type="button" onClick={doConfirmImport} className="press"
+                style={{ width: "100%", padding: 11, background: C.accent, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
+                Import
               </button>
             </div>
           )}
