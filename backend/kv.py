@@ -13,7 +13,6 @@ def db_path():
         return Path(__file__).resolve().parent.parent / "ledger.db"
     p = Path(os.environ.get("APPDATA", str(Path(sys.executable).parent))) / "LedgerBook" / "ledger.db"
     p.parent.mkdir(parents=True, exist_ok=True)
-    # Old placement kept the db beside the exe; migrate it once so existing data survives.
     old = Path(sys.executable).parent / "ledger.db"
     if old.exists() and not p.exists():
         shutil.move(str(old), str(p))

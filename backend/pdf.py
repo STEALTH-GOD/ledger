@@ -14,12 +14,6 @@ MARGIN = 14
 
 
 def build_pdf(rows, summary, single=False):
-    """rows: [{date, account, desc, credit, debit, balance}] (credit/debit/balance
-    are already-formatted display strings) → BytesIO holding a PDF.
-
-    summary: {credit, debit, balance} display strings for the header line.
-    single:  True omits the Account column (one-account report).
-    """
     pdf = FPDF(format="A4")
     pdf.set_auto_page_break(True, margin=18)
     pdf.set_margins(MARGIN, 16, MARGIN)

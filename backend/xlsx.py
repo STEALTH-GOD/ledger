@@ -56,13 +56,6 @@ def parse_workbook(path):
 
 
 def parse_legacy_xls(path):
-    """Read an old-format `.xls` (Account Manager / zlinksoft Android export) →
-    [{account, date, desc, type, amount}].
-
-    Layout: sheet name = account; header `# | Date | Description | Debit | Credit`;
-    dates `DD-MM-YYYY`; trailing `Total` / `Balance` / "Created by…" footer rows
-    to skip. Real data rows always have a description, so skip empty-desc rows.
-    """
     import xlrd
     wb = xlrd.open_workbook(str(path))
     sheet = wb.sheet_by_index(0)

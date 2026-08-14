@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import {
   Plus, Trash2, ArrowUpRight, ArrowDownLeft, LayoutDashboard, BarChart2,
-  BookOpen, ChevronLeft, ChevronRight, X, Wallet, AlertTriangle, Download, Upload, Pencil, FileSpreadsheet, FileText,
+  BookOpen, ChevronLeft, ChevronRight, X, Wallet, AlertTriangle, Download, Upload, Pencil, FileSpreadsheet, FileText, Search,
 } from "lucide-react";
 import { loadData, saveData, exportXlsx, exportPdf, importXlsx } from "./api.js";
 import { C, T, SP, ACCENT_COLORS, fmtNum } from "./theme.js";
@@ -180,6 +180,7 @@ export default function LedgerApp() {
   const [editTx, setEditTx] = useState(null); // transaction being edited, null = new entry
   const [txForm, setTxForm] = useState({ type: "credit", amount: "", desc: "", date: todayStr() });
   const [accForm, setAccForm] = useState({ name: "", opening: "" });
+  const [accQuery, setAccQuery] = useState("");
   const [rename, setRename] = useState(null); // { id, name } — account being renamed
   const [confirmId, setConfirmId] = useState(null);
   const [confirmTx, setConfirmTx] = useState(null); // transaction pending deletion confirm
@@ -257,6 +258,12 @@ export default function LedgerApp() {
     const opening = acc.opening || 0;
     return { ...acc, credit, debit, balance: opening + credit - debit, count: txs.length };
   }), [data]);
+
+  const filteredStats = useMemo(() => {
+    const q = accQuery.trim().toLowerCase();
+    if (!q) return stats;
+    return stats.filter((a) => a.name.toLowerCase().includes(q));
+  }, [stats, accQuery]);
 
   const totals = useMemo(() => ({
     credit: stats.reduce((s, a) => s + a.credit, 0),
@@ -605,40 +612,59 @@ export default function LedgerApp() {
                 </div>
 
                 {/* Account List */}
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.textPrimary, marginBottom: 10 }}>All accounts</div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: C.textPrimary }}>All accounts</div>
+                </div>
+                <div style={{ position: "relative", marginBottom: SP.md }}>
+                  <Search size={14} color={C.iconMuted} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", pointerEvents: "none" }} />
+                  <input
+                    type="search"
+                    value={accQuery}
+                    onChange={(e) => setAccQuery(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Escape") setAccQuery(""); }}
+                    aria-label="Search accounts"
+                    placeholder="Search accounts"
+                    style={{ width: "100%", padding: "9px 12px 9px 32px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, color: C.textPrimary, background: C.inputBg, fontFamily: "inherit", boxSizing: "border-box" }} />
+                </div>
                 <div className="stagger" style={{ display: "flex", flexDirection: "column", gap: SP.sm }}>
-                  {stats.map((acc, i) => (
-                    <div key={acc.id} className="acc-row"
-                      style={{ "--i": i, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.md}px ${SP.cardPad.md}px`, width: "100%", display: "flex", alignItems: "center", gap: SP.md }}>
-                      <button type="button" onClick={() => openAcc(acc.id)}
-                        style={{ ...resetBtn, flex: 1, minWidth: 0, gap: SP.md, alignItems: "center" }}>
-                        <div style={{ width: 38, height: 38, borderRadius: "50%", background: ACCENT_COLORS[i % ACCENT_COLORS.length] + "18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: ACCENT_COLORS[i % ACCENT_COLORS.length], flexShrink: 0 }}>
-                          {acc.name.charAt(0).toUpperCase()}
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 14, fontWeight: 600, color: C.textPrimary }}>{acc.name}</div>
-                          <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2 }}>
-                            {acc.count} entr{acc.count !== 1 ? "ies" : "y"}
-                          </div>
-                        </div>
-                        <div style={{ textAlign: "right" }}>
-                          <div style={{ fontSize: 16, fontWeight: 700, color: acc.balance >= 0 ? C.credit : C.debit }}>
-                            {RS}{fmtNum(acc.balance)}
-                          </div>
-                          <div style={{ fontSize: 11, color: C.textSecondary, marginTop: 2 }}>
-                            <span style={{ color: C.credit }}>+{fmtNum(acc.credit)}</span>
-                            <span style={{ margin: "0 4px" }}>/</span>
-                            <span style={{ color: C.debit }}>-{fmtNum(acc.debit)}</span>
-                          </div>
-                        </div>
-                        <ChevronRight size={15} color={C.iconMuted} />
-                      </button>
-                      <button type="button" onClick={() => requestRenameAcc(acc.id)} aria-label={`Rename ${acc.name}`} className="iconbtn"
-                        style={{ ...resetBtn, color: C.textSecondary, padding: 4, borderRadius: 6, flexShrink: 0 }}>
-                        <Pencil size={15} color={C.iconMuted} />
-                      </button>
+                  {filteredStats.length === 0 ? (
+                    <div style={{ textAlign: "center", padding: "32px 0", border: `1px dashed ${C.border}`, borderRadius: 10, fontSize: 13, color: C.textSecondary }}>
+                      No accounts match
                     </div>
-                  ))}
+                  ) : (
+                    filteredStats.map((acc, i) => (
+                      <div key={acc.id} className="acc-row"
+                        style={{ "--i": i, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.md}px ${SP.cardPad.md}px`, width: "100%", display: "flex", alignItems: "center", gap: SP.md }}>
+                        <button type="button" onClick={() => openAcc(acc.id)}
+                          style={{ ...resetBtn, flex: 1, minWidth: 0, gap: SP.md, alignItems: "center" }}>
+                          <div style={{ width: 38, height: 38, borderRadius: "50%", background: ACCENT_COLORS[i % ACCENT_COLORS.length] + "18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: ACCENT_COLORS[i % ACCENT_COLORS.length], flexShrink: 0 }}>
+                            {acc.name.charAt(0).toUpperCase()}
+                          </div>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 14, fontWeight: 600, color: C.textPrimary }}>{acc.name}</div>
+                            <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2 }}>
+                              {acc.count} entr{acc.count !== 1 ? "ies" : "y"}
+                            </div>
+                          </div>
+                          <div style={{ textAlign: "right" }}>
+                            <div style={{ fontSize: 16, fontWeight: 700, color: acc.balance >= 0 ? C.credit : C.debit }}>
+                              {RS}{fmtNum(acc.balance)}
+                            </div>
+                            <div style={{ fontSize: 11, color: C.textSecondary, marginTop: 2 }}>
+                              <span style={{ color: C.credit }}>+{fmtNum(acc.credit)}</span>
+                              <span style={{ margin: "0 4px" }}>/</span>
+                              <span style={{ color: C.debit }}>-{fmtNum(acc.debit)}</span>
+                            </div>
+                          </div>
+                          <ChevronRight size={15} color={C.iconMuted} />
+                        </button>
+                        <button type="button" onClick={() => requestRenameAcc(acc.id)} aria-label={`Rename ${acc.name}`} className="iconbtn"
+                          style={{ ...resetBtn, color: C.textSecondary, padding: 4, borderRadius: 6, flexShrink: 0 }}>
+                          <Pencil size={15} color={C.iconMuted} />
+                        </button>
+                      </div>
+                    ))
+                  )}
                 </div>
               </>
             )}
