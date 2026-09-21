@@ -3,7 +3,8 @@ import {
   Plus, Trash2, ArrowUpRight, ArrowDownLeft, LayoutDashboard, BarChart2,
   BookOpen, ChevronLeft, ChevronRight, X, Wallet, AlertTriangle, Download, Upload, Pencil, FileSpreadsheet, FileText, Search, LogOut, Menu,
 } from "lucide-react";
-import { loadData, saveData, exportXlsx, exportPdf, importXlsx, onAuthChange, signIn, signUp, signOut } from "./api.js";
+import { loadData, initSync, startSync, disposeSync, enqueue, flush, retryNow, dismissError, mutationSeq, exportXlsx, exportPdf, importXlsx, onAuthChange, signIn, signUp, signOut } from "./api.js";
+import { toC, fromC, todayStr, isValidYmd, fmtDate, parseMoney } from "./util.js";
 import { C, T, SP, ACCENT_COLORS, fmtNum } from "./theme.js";
 
 // Code-split: recharts + lucide-heavy chart view loaded only when Charts is opened.
@@ -13,7 +14,6 @@ const RS = "Rs. ";
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
-const todayStr = () => new Date().toISOString().split("T")[0];
 
 // True below the tablet breakpoint; updates live on rotate / resize.
 function useIsMobile(bp = 768) {
@@ -196,7 +196,7 @@ button { touch-action: manipulation; }
 }
 `;
 
-function Ledger({ email, onSignOut }) {
+function Ledger({ userId, email, onSignOut }) {
   const [data, setData] = useState({ accounts: [], transactions: [] });
   const [view, setView] = useState("dashboard");
   const [activeId, setActiveId] = useState(null);
@@ -217,28 +217,60 @@ function Ledger({ email, onSignOut }) {
   const isMobile = useIsMobile();
   const [navOpen, setNavOpen] = useState(false);
   const pad = isMobile ? SP.lg : SP.pagePad; // page gutter
-  const saveTimer = useRef(null);
+  const [loadError, setLoadError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+  const [sync, setSync] = useState({ pending: 0, saving: false, retrying: false, reason: "", error: "", offline: false });
   const panelRef = useRef(null);
+  const panelOpenRef = useRef(false);
+  panelOpenRef.current = !!panel;
 
+  // Load once per user, then start the background writer. Changes left unsaved by a previous visit are
+  // restored by loadData() and delivered by startSync().
   useEffect(() => {
+    let alive = true;
+    setLoadError("");
+    initSync(userId, (st) => { if (alive) setSync(st); });
     (async () => {
       try {
-        const raw = await loadData();
-        if (raw) setData(JSON.parse(raw));
-      } catch (e) { console.error("Load failed", e); setNotice(`Load failed: ${e?.message || e}`); }
-      setLoaded(true);
+        const d = await loadData();
+        if (!alive) return;
+        setData(d); setLoaded(true); startSync();
+      } catch (e) {
+        console.error("Load failed", e);
+        if (alive) setLoadError(e?.message || String(e));
+      }
     })();
-  }, []);
+    return () => { alive = false; disposeSync(); };
+  }, [userId, reloadKey]);
 
-  // Debounced save: fires ~500ms after last change, never on first load.
+  // Several devices: when you return to the tab, push anything pending and pull other devices' changes.
   useEffect(() => {
     if (!loaded) return;
-    clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      saveData(JSON.stringify(data)).catch((e) => { console.error("Save failed", e); setNotice(`Save failed: ${e?.message || e}`); });
-    }, 500);
-    return () => clearTimeout(saveTimer.current);
-  }, [data, loaded]);
+    let last = Date.now();
+    const refresh = async () => {
+      if (document.visibilityState !== "visible" || panelOpenRef.current) return;
+      if (Date.now() - last < 10000) return;
+      last = Date.now();
+      try {
+        await flush();
+        const mark = mutationSeq();
+        const d = await loadData();
+        if (mutationSeq() === mark) setData(d); // skip if you changed something while it was loading
+      } catch {}
+    };
+    const onVis = () => { if (document.visibilityState === "hidden") flush(); else refresh(); };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("focus", refresh);
+    return () => { document.removeEventListener("visibilitychange", onVis); window.removeEventListener("focus", refresh); };
+  }, [loaded]);
+
+  // If the database rejects a change, resync so the screen shows what was really saved.
+  useEffect(() => {
+    if (!sync.error || !loaded) return;
+    (async () => {
+      try { const mark = mutationSeq(); const d = await loadData(); if (mutationSeq() === mark) setData(d); } catch {}
+    })();
+  }, [sync.error, loaded]);
 
   // Focus first field, trap Tab within the dialog, ESC to close.
   useEffect(() => {
@@ -275,7 +307,7 @@ function Ledger({ email, onSignOut }) {
   // Auto-dismiss the export/import toast after ~3s.
   useEffect(() => {
     if (!notice) return;
-    const t = setTimeout(() => setNotice(""), 3000);
+    const t = setTimeout(() => setNotice(""), Math.max(3000, notice.length * 70));
     return () => clearTimeout(t);
   }, [notice]);
 
@@ -290,12 +322,14 @@ function Ledger({ email, onSignOut }) {
 
   const activeAcc = useMemo(() => data.accounts.find((a) => a.id === activeId), [data.accounts, activeId]);
 
+  // The open account was deleted on another device → go back to the dashboard.
+  useEffect(() => { if (loaded && view === "account" && !activeAcc) setView("dashboard"); }, [loaded, view, activeAcc]);
+
   const stats = useMemo(() => data.accounts.map((acc) => {
     const txs = data.transactions.filter((t) => t.accountId === acc.id);
-    const credit = txs.filter((t) => t.type === "credit").reduce((s, t) => s + t.amount, 0);
-    const debit = txs.filter((t) => t.type === "debit").reduce((s, t) => s + t.amount, 0);
-    const opening = acc.opening || 0;
-    return { ...acc, credit, debit, balance: opening + credit - debit, count: txs.length };
+    const credit = txs.filter((t) => t.type === "credit").reduce((s, t) => s + toC(t.amount), 0);
+    const debit = txs.filter((t) => t.type === "debit").reduce((s, t) => s + toC(t.amount), 0);
+    return { ...acc, credit: fromC(credit), debit: fromC(debit), balance: fromC(toC(acc.opening) + credit - debit), count: txs.length };
   }), [data]);
 
   const filteredStats = useMemo(() => {
@@ -305,35 +339,37 @@ function Ledger({ email, onSignOut }) {
   }, [stats, accQuery]);
 
   const totals = useMemo(() => ({
-    credit: stats.reduce((s, a) => s + a.credit, 0),
-    debit: stats.reduce((s, a) => s + a.debit, 0),
-    balance: stats.reduce((s, a) => s + a.balance, 0),
+    credit: fromC(stats.reduce((s, a) => s + toC(a.credit), 0)),
+    debit: fromC(stats.reduce((s, a) => s + toC(a.debit), 0)),
+    balance: fromC(stats.reduce((s, a) => s + toC(a.balance), 0)),
   }), [stats]);
 
   const accTxs = useMemo(() => {
     if (!activeId) return [];
     return data.transactions
       .filter((t) => t.accountId === activeId)
-      .sort((a, b) => new Date(a.date) - new Date(b.date) || new Date(a.createdAt) - new Date(b.createdAt));
+      .sort((a, b) => (a.date || "").localeCompare(b.date || "") || (new Date(a.createdAt) - new Date(b.createdAt) || 0));
   }, [data.transactions, activeId]);
 
   const txsWithBalance = useMemo(() => {
-    let bal = activeAcc?.opening || 0;
+    let bal = toC(activeAcc?.opening);
     return accTxs.map((tx) => {
-      bal += tx.type === "credit" ? tx.amount : -tx.amount;
-      return { ...tx, runBal: bal };
+      bal += tx.type === "credit" ? toC(tx.amount) : -toC(tx.amount);
+      return { ...tx, runBal: fromC(bal) };
     });
   }, [accTxs, activeAcc]);
 
   const chartData = useMemo(() => {
     const map = {};
     data.transactions.forEach((t) => {
-      const d = new Date(t.date);
-      const key = `${d.getFullYear()}-${String(d.getMonth()).padStart(2, "0")}`;
-      if (!map[key]) map[key] = { name: MONTHS[d.getMonth()], year: d.getFullYear(), credit: 0, debit: 0 };
-      map[key][t.type] += t.amount;
+      const [y, m] = (t.date || "").split("-").map(Number);
+      if (!y || !m) return;
+      const key = `${y}-${String(m - 1).padStart(2, "0")}`;
+      if (!map[key]) map[key] = { name: MONTHS[m - 1], year: y, credit: 0, debit: 0 };
+      map[key][t.type] += toC(t.amount);
     });
-    return Object.entries(map).sort(([a], [b]) => a.localeCompare(b)).slice(-7).map(([, v]) => v);
+    return Object.entries(map).sort(([a], [b]) => a.localeCompare(b)).slice(-7)
+      .map(([, v]) => ({ ...v, credit: fromC(v.credit), debit: fromC(v.debit) }));
   }, [data.transactions]);
 
   const openAcc = (id) => { setActiveId(id); setView("account"); setPanel(null); };
@@ -343,28 +379,33 @@ function Ledger({ email, onSignOut }) {
   const doAddAcc = () => {
     const name = accForm.name.trim();
     if (!name) { setErr("Account name is required"); return; }
-    const opening = parseFloat(accForm.opening) || 0;
+    if (name.length > 100) { setErr("Account name is too long (100 characters max)"); return; }
+    const opening = parseMoney(accForm.opening, { negative: true, empty: 0 });
+    if (opening === null) { setErr("Opening balance must be a number with at most 2 decimals"); return; }
     const acc = { id: uid(), name, currency: "NPR", opening, createdAt: new Date().toISOString() };
     setData((d) => ({ ...d, accounts: [...d.accounts, acc] }));
+    enqueue([{ t: "acc", k: "up", row: acc }]);
     setAccForm({ name: "", opening: "" });
     setErr(""); setPanel(null);
     openAcc(acc.id);
   };
 
   const doAddTx = () => {
-    const amount = parseFloat(txForm.amount) || 0;
-    if (amount < 0) { setErr("Enter a valid amount"); return; }
-    if (!txForm.description.trim()) { setErr("Description is required"); return; }
-    const now = new Date().toISOString();
+    const amount = parseMoney(txForm.amount);
+    if (amount === null) { setErr(String(txForm.amount ?? "").trim() === "" ? "Enter an amount (0 is allowed)" : "Amount must be a number with at most 2 decimals"); return; }
+    const description = txForm.description.trim();
+    if (!description) { setErr("Description is required"); return; }
+    if (description.length > 500) { setErr("Description is too long (500 characters max)"); return; }
+    if (!isValidYmd(txForm.date)) { setErr("Pick a valid date"); return; }
     if (editTx) {
-      setData((d) => ({ ...d, transactions: d.transactions.map((t) =>
-        t.id === editTx.id
-          ? { ...t, type: txForm.type, amount, description: txForm.description.trim(), date: txForm.date }
-          : t
-      ) }));
+      const cur = data.transactions.find((t) => t.id === editTx.id) || editTx;
+      const updated = { ...cur, type: txForm.type, amount, description, date: txForm.date };
+      setData((d) => ({ ...d, transactions: d.transactions.map((t) => (t.id === updated.id ? updated : t)) }));
+      enqueue([{ t: "tx", k: "up", row: updated }]);
     } else {
-      const tx = { id: uid(), accountId: activeId, type: txForm.type, amount, description: txForm.description.trim(), date: txForm.date, createdAt: now };
+      const tx = { id: uid(), accountId: activeId, type: txForm.type, amount, description, date: txForm.date, createdAt: new Date().toISOString() };
       setData((d) => ({ ...d, transactions: [...d.transactions, tx] }));
+      enqueue([{ t: "tx", k: "up", row: tx }]);
     }
     setTxForm({ type: "credit", amount: "", description: "", date: todayStr() });
     setEditTx(null);
@@ -373,10 +414,11 @@ function Ledger({ email, onSignOut }) {
 
   const requestDeleteTx = (tx) => { setConfirmTx(tx); setErr(""); setPanel("confirm-del-tx"); };
 
-  const doDeleteTx = (id) => setData((d) => ({ ...d, transactions: d.transactions.filter((t) => t.id !== id) }));
-
   const doConfirmDeleteTx = () => {
-    if (confirmTx) setData((d) => ({ ...d, transactions: d.transactions.filter((t) => t.id !== confirmTx.id) }));
+    if (confirmTx) {
+      setData((d) => ({ ...d, transactions: d.transactions.filter((t) => t.id !== confirmTx.id) }));
+      enqueue([{ t: "tx", k: "del", id: confirmTx.id }]);
+    }
     closePanel();
   };
 
@@ -384,24 +426,24 @@ function Ledger({ email, onSignOut }) {
   // All-accounts export rows: per-account running balance across a date-sorted flat list.
   const exportRows = useMemo(() => {
     const bal = {};
-    data.accounts.forEach((a) => { bal[a.id] = a.opening || 0; });
+    data.accounts.forEach((a) => { bal[a.id] = toC(a.opening); });
     const name = new Map(data.accounts.map((a) => [a.id, a.name]));
     return [...data.transactions]
-      .sort((a, b) => new Date(a.date) - new Date(b.date) || (a.createdAt || "").localeCompare(b.createdAt || ""))
+      .sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.createdAt || "").localeCompare(b.createdAt || ""))
       .map((t) => {
-        bal[t.accountId] += t.type === "credit" ? t.amount : -t.amount;
+        bal[t.accountId] = (bal[t.accountId] ?? 0) + (t.type === "credit" ? toC(t.amount) : -toC(t.amount));
         return {
           date: t.date,
           account: name.get(t.accountId) || "",
           description: t.description,
           credit: t.type === "credit" ? t.amount : 0,
           debit: t.type === "debit" ? t.amount : 0,
-          balance: Math.round(bal[t.accountId] * 100) / 100,
+          balance: fromC(bal[t.accountId]),
         };
       });
   }, [data]);
 
-  const fmtMoney = (n) => `${RS}${fmtNum(n)}`;
+  const fmtMoney = (n) => `${n < 0 ? "-" : ""}${RS}${fmtNum(n)}`;
 
   // Shared per-export data: flat rows (xlsx numbers) + display mirror (pdf strings)
   // + one-line summary (grand totals for "all", this account's for a single account).
@@ -452,34 +494,46 @@ function Ledger({ email, onSignOut }) {
   const openExport = (scope) => { setExportScope(scope); setErr(""); setPanel("export"); };
 
   // Import: every row goes to the account named in its own Account column (created if missing).
-  // Legacy .xls rows already carry the sheet name as their account.
+  // Legacy .xls rows already carry the sheet name as their account. Bad rows are reported, never guessed.
   const doImport = async () => {
-    let rows;
-    try { rows = await importXlsx(); }
-    catch { setNotice("Import failed"); return; }
-    if (!rows || rows.length === 0) { setNotice("Nothing to import"); return; }
+    let res;
+    try { res = await importXlsx(); }
+    catch (e) { setNotice(`Import failed: ${e?.message || e}`); return; }
+    if (!res) return; // file picker cancelled
+    const { rows, invalid } = res;
+    if (rows.length === 0 && invalid.length === 0) { setNotice("Nothing to import"); return; }
 
     const nameKey = (x) => (x || "").trim().toLowerCase();
-    const accs = [...data.accounts];
-    const byKey = new Map(accs.map((a) => [nameKey(a.name), a]));
-    const existing = new Set(data.transactions.map((t) => `${t.accountId}|${t.date}|${t.description}|${t.amount}`));
-    const imported = [];
-    let skipped = 0, created = 0;
+    const byKey = new Map(data.accounts.map((a) => [nameKey(a.name), a]));
+    const sig = (accId, r) => `${accId}|${r.date}|${r.description}|${r.type}|${toC(r.amount)}`;
+    const existing = new Set(data.transactions.map((t) => sig(t.accountId, t)));
+    const newAccs = [], imported = [];
+    let skipped = 0;
 
     for (const r of rows) {
       const key = nameKey(r.account);
-      if (!key) { skipped++; continue; }
       let acc = byKey.get(key);
       if (!acc) {
         acc = { id: uid(), name: r.account.trim(), currency: "NPR", opening: 0, createdAt: new Date().toISOString() };
-        accs.push(acc); byKey.set(key, acc); created++;
+        byKey.set(key, acc); newAccs.push(acc);
       }
-      if (existing.has(`${acc.id}|${r.date}|${r.description}|${r.amount}`)) { skipped++; continue; }
+      if (existing.has(sig(acc.id, r))) { skipped++; continue; }
       imported.push({ id: uid(), accountId: acc.id, type: r.type, amount: r.amount, description: r.description, date: r.date, createdAt: new Date().toISOString() });
     }
 
-    setData({ accounts: accs, transactions: [...data.transactions, ...imported] });
-    setNotice(`${imported.length} imported, ${skipped} skipped${created ? `, ${created} account${created !== 1 ? "s" : ""} created` : ""}`);
+    if (newAccs.length || imported.length) {
+      setData((d) => ({ accounts: [...d.accounts, ...newAccs], transactions: [...d.transactions, ...imported] }));
+      enqueue([...newAccs.map((row) => ({ t: "acc", k: "up", row })), ...imported.map((row) => ({ t: "tx", k: "up", row }))]);
+    }
+
+    const parts = [`${imported.length} imported`];
+    if (skipped) parts.push(`${skipped} duplicate${skipped !== 1 ? "s" : ""} skipped`);
+    if (newAccs.length) parts.push(`${newAccs.length} account${newAccs.length !== 1 ? "s" : ""} created`);
+    if (invalid.length) {
+      const shown = invalid.slice(0, 3).map((x) => `row ${x.row}: ${x.reason}`).join("; ");
+      parts.push(`${invalid.length} invalid row${invalid.length !== 1 ? "s" : ""} ignored (${shown}${invalid.length > 3 ? "; …" : ""})`);
+    }
+    setNotice(parts.join(", "));
   };
 
   const requestDeleteAcc = (id) => { setConfirmId(id); setErr(""); setPanel("confirm-del"); };
@@ -498,13 +552,17 @@ function Ledger({ email, onSignOut }) {
     const clash = data.accounts.some(
       (a) => a.id !== rename.id && a.name.trim().toLowerCase() === target.toLowerCase());
     if (clash) { setErr("An account with this name already exists"); return; }
-    setData((d) => ({ ...d, accounts: d.accounts.map((a) =>
-      a.id === rename.id ? { ...a, name: target } : a) }));
+    const cur = data.accounts.find((a) => a.id === rename.id);
+    if (!cur) { closePanel(); return; }
+    const updated = { ...cur, name: target };
+    setData((d) => ({ ...d, accounts: d.accounts.map((a) => (a.id === rename.id ? updated : a)) }));
+    enqueue([{ t: "acc", k: "up", row: updated }]);
     setRename(null); setErr(""); setPanel(null);
   };
 
   // Called from the confirm dialog's "Delete" action.
   const doConfirmDeleteAcc = () => {
+    enqueue([{ t: "acc", k: "del", id: confirmId }]); // the database also removes its entries (ON DELETE CASCADE)
     setData((d) => ({
       accounts: d.accounts.filter((a) => a.id !== confirmId),
       transactions: d.transactions.filter((t) => t.accountId !== confirmId),
@@ -520,9 +578,28 @@ function Ledger({ email, onSignOut }) {
 
   const openEditTx = (tx) => {
     setErr(""); setEditTx(tx);
-    setTxForm({ type: tx.type, amount: tx.amount, description: tx.description, date: tx.date });
+    setTxForm({ type: tx.type, amount: String(tx.amount), description: tx.description, date: tx.date });
     setPanel("add-tx");
   };
+
+  if (loadError && !loaded) return (
+    <div style={{ display: "flex", minHeight: "100dvh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif", padding: SP.lg }}>
+      <style>{globalCss}</style>
+      <div role="alert" style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, maxWidth: "100%", boxShadow: C.shadowModal, textAlign: "center" }}>
+        <div style={{ width: 48, height: 48, background: C.debitBg, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px" }}>
+          <AlertTriangle size={22} color={C.debit} />
+        </div>
+        <div style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Couldn't load your ledger</div>
+        <p style={{ fontSize: T.body, color: C.textSecondary, margin: "8px 0 20px", overflowWrap: "anywhere" }}>{loadError}</p>
+        <div style={{ display: "flex", gap: 10 }}>
+          <button type="button" onClick={onSignOut} className="press"
+            style={{ flex: 1, padding: 11, background: C.bg, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>Sign out</button>
+          <button type="button" onClick={() => setReloadKey((k) => k + 1)} className="press"
+            style={{ flex: 1, padding: 11, background: C.accent, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>Try again</button>
+        </div>
+      </div>
+    </div>
+  );
 
   if (!loaded) return (
     <div style={{ display: "flex", height: "100dvh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
@@ -538,6 +615,11 @@ function Ledger({ email, onSignOut }) {
   );
 
   const activeStat = stats.find((a) => a.id === activeId);
+  const syncText = sync.error ? "A change couldn't be saved"
+    : sync.saving ? "Saving…"
+    : sync.pending > 0 ? `${sync.pending} unsaved change${sync.pending !== 1 ? "s" : ""}`
+    : "All changes saved";
+  const syncWarn = !!sync.error || (sync.pending > 0 && !sync.saving);
   const confirmAcc = data.accounts.find((a) => a.id === confirmId);
   const confirmTxCount = confirmAcc ? data.transactions.filter((t) => t.accountId === confirmAcc.id).length : 0;
 
@@ -608,7 +690,8 @@ function Ledger({ email, onSignOut }) {
             </button>
           </div>
           <div style={{ marginTop: 6, paddingTop: 10, borderTop: `1px solid ${C.sidebarBorder}` }}>
-            <div title={email} style={{ fontSize: 11, color: C.sidebarLabel, padding: "0 10px 6px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email}</div>
+            <div title={email} style={{ fontSize: 11, color: C.sidebarLabel, padding: "0 10px 2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email}</div>
+            <div aria-live="polite" style={{ fontSize: 11, padding: "0 10px 6px", color: syncWarn ? C.ringOnDark : C.sidebarLabel }}>{syncText}</div>
             <button type="button" onClick={onSignOut} className="snav">
               <LogOut size={14} strokeWidth={1.8} /> Sign out
             </button>
@@ -628,6 +711,20 @@ function Ledger({ email, onSignOut }) {
               <BookOpen size={13} color="#fff" />
             </div>
             <div style={{ fontSize: 14, fontWeight: 600, color: C.textPrimary }}>Ledger Book</div>
+            <div aria-live="polite" style={{ marginLeft: "auto", fontSize: 11, color: syncWarn ? C.debit : C.textSecondary }}>{syncText}</div>
+          </div>
+        )}
+        {(sync.error || (sync.retrying && sync.pending > 0)) && (
+          <div role="alert" style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", gap: SP.md, flexWrap: "wrap", padding: `${SP.sm}px ${pad}px`, background: C.debitBg, color: C.debit, borderBottom: `1px solid ${C.border}`, fontSize: 13 }}>
+            <span style={{ overflowWrap: "anywhere" }}>
+              {sync.error
+                ? `A change couldn't be saved and was skipped: ${sync.error}`
+                : `${sync.pending} change${sync.pending !== 1 ? "s" : ""} not saved yet${sync.offline ? " — you're offline" : ""}. Kept on this device and retrying…`}
+            </span>
+            <button type="button" onClick={sync.error ? dismissError : retryNow} className="press"
+              style={{ ...resetBtn, fontWeight: 600, textDecoration: "underline", color: C.debit }}>
+              {sync.error ? "Dismiss" : "Retry now"}
+            </button>
           </div>
         )}
 
@@ -705,7 +802,7 @@ function Ledger({ email, onSignOut }) {
                           </div>
                           <div style={isMobile ? { width: "100%", display: "flex", justifyContent: "space-between", alignItems: "baseline" } : { textAlign: "right" }}>
                             <div style={{ fontSize: 16, fontWeight: 700, color: acc.balance >= 0 ? C.credit : C.debit }}>
-                              {RS}{fmtNum(acc.balance)}
+                              {acc.balance < 0 ? "-" : ""}{RS}{fmtNum(acc.balance)}
                             </div>
                             <div style={{ fontSize: 11, color: C.textSecondary, marginTop: 2 }}>
                               <span style={{ color: C.credit }}>+{fmtNum(acc.credit)}</span>
@@ -767,11 +864,11 @@ function Ledger({ email, onSignOut }) {
                 {[
                   { label: "Total Credit", val: activeStat?.credit || 0, color: C.credit },
                   { label: "Total Debit", val: activeStat?.debit || 0, color: C.debit },
-                  { label: "Balance", val: Math.abs(activeStat?.balance || 0), color: (activeStat?.balance || 0) >= 0 ? C.credit : C.debit },
+                  { label: "Balance", val: activeStat?.balance || 0, color: (activeStat?.balance || 0) >= 0 ? C.credit : C.debit },
                 ].map((s, i) => (
                   <div key={i} className="stat-card" style={{ flex: isMobile ? "1 1 calc(50% - 6px)" : 1, minWidth: 0, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.lg}px ${SP.cardPad.md}px` }}>
                     <div style={{ fontSize: 11, color: C.textSecondary, textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: SP.sm }}>{s.label}</div>
-                    <div style={{ fontSize: 16, color: s.color, fontWeight: 700 }}>{RS}{fmtNum(s.val)}</div>
+                    <div style={{ fontSize: 16, color: s.color, fontWeight: 700 }}>{s.val < 0 ? "-" : ""}{RS}{fmtNum(s.val)}</div>
                   </div>
                 ))}
               </div>
@@ -795,7 +892,7 @@ function Ledger({ email, onSignOut }) {
                       </div>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: SP.xs }}>
                         <div style={{ fontSize: 12, color: tx.runBal < 0 ? C.debit : C.textSecondary }}>
-                          {new Date(tx.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                          {fmtDate(tx.date)}
                           {" · "}Bal {tx.runBal < 0 ? "Dr " : ""}{fmtNum(tx.runBal)}
                         </div>
                         <div style={{ display: "flex", gap: 2, margin: "-8px -8px -8px 0" }}>
@@ -836,7 +933,7 @@ function Ledger({ email, onSignOut }) {
                         onMouseEnter={(e) => (e.currentTarget.style.background = C.hoverRow)}
                         onMouseLeave={(e) => (e.currentTarget.style.background = i % 2 === 0 ? C.card : C.zebra)}>
                         <td style={{ padding: `${SP.feet.t}px 12px`, color: C.textSecondary, fontSize: 12, whiteSpace: "nowrap", borderBottom: `1px solid ${C.border}` }}>
-                          {new Date(tx.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                          {fmtDate(tx.date)}
                         </td>
                         <td style={{ padding: `${SP.feet.t}px 12px`, color: C.textPrimary, borderBottom: `1px solid ${C.border}` }}>
                           {tx.description}
@@ -1040,7 +1137,7 @@ function Ledger({ email, onSignOut }) {
               </div>
               <div id="confirmtx-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Delete this entry?</div>
               <p id="confirmtx-desc" style={{ fontSize: T.body, color: C.textSecondary, margin: "8px 0 20px" }}>
-                {confirmTx.description} · {RS}{fmtNum(confirmTx.amount)} on {new Date(confirmTx.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                {confirmTx.description} · {RS}{fmtNum(confirmTx.amount)} on {fmtDate(confirmTx.date)}
               </p>
               <div style={{ display: "flex", gap: 10 }}>
                 <button type="button" onClick={closePanel} id="confirm-cancel" className="press"
@@ -1173,5 +1270,5 @@ export default function LedgerApp() {
   );
   if (!session) return <Login />;
   // key = user id: switching accounts fully resets in-memory ledger state
-  return <Ledger key={session.user.id} email={session.user.email} onSignOut={signOut} />;
+  return <Ledger key={session.user.id} userId={session.user.id} email={session.user.email} onSignOut={signOut} />;
 }
