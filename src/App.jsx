@@ -178,7 +178,7 @@ export default function LedgerApp() {
   const [importRows, setImportRows] = useState(null);   // parsed rows awaiting account-name dialog
   const [importName, setImportName] = useState("");
   const [editTx, setEditTx] = useState(null); // transaction being edited, null = new entry
-  const [txForm, setTxForm] = useState({ type: "credit", amount: "", desc: "", date: todayStr() });
+  const [txForm, setTxForm] = useState({ type: "credit", amount: "", description: "", date: todayStr() });
   const [accForm, setAccForm] = useState({ name: "", opening: "" });
   const [accQuery, setAccQuery] = useState("");
   const [rename, setRename] = useState(null); // { id, name } — account being renamed
@@ -195,7 +195,7 @@ export default function LedgerApp() {
       try {
         const raw = await loadData();
         if (raw) setData(JSON.parse(raw));
-      } catch {}
+      } catch (e) { console.error("Load failed", e); setNotice(`Load failed: ${e?.message || e}`); }
       setLoaded(true);
     })();
   }, []);
@@ -205,7 +205,7 @@ export default function LedgerApp() {
     if (!loaded) return;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      saveData(JSON.stringify(data)).catch(() => {});
+      saveData(JSON.stringify(data)).catch((e) => { console.error("Save failed", e); setNotice(`Save failed: ${e?.message || e}`); });
     }, 500);
     return () => clearTimeout(saveTimer.current);
   }, [data, loaded]);
@@ -315,19 +315,19 @@ export default function LedgerApp() {
   const doAddTx = () => {
     const amount = parseFloat(txForm.amount) || 0;
     if (amount < 0) { setErr("Enter a valid amount"); return; }
-    if (!txForm.desc.trim()) { setErr("Description is required"); return; }
+    if (!txForm.description.trim()) { setErr("Description is required"); return; }
     const now = new Date().toISOString();
     if (editTx) {
       setData((d) => ({ ...d, transactions: d.transactions.map((t) =>
         t.id === editTx.id
-          ? { ...t, type: txForm.type, amount, desc: txForm.desc.trim(), date: txForm.date }
+          ? { ...t, type: txForm.type, amount, description: txForm.description.trim(), date: txForm.date }
           : t
       ) }));
     } else {
-      const tx = { id: uid(), accountId: activeId, type: txForm.type, amount, desc: txForm.desc.trim(), date: txForm.date, createdAt: now };
+      const tx = { id: uid(), accountId: activeId, type: txForm.type, amount, description: txForm.description.trim(), date: txForm.date, createdAt: now };
       setData((d) => ({ ...d, transactions: [...d.transactions, tx] }));
     }
-    setTxForm({ type: "credit", amount: "", desc: "", date: todayStr() });
+    setTxForm({ type: "credit", amount: "", description: "", date: todayStr() });
     setEditTx(null);
     setErr(""); setPanel(null);
   };
@@ -354,7 +354,7 @@ export default function LedgerApp() {
         return {
           date: t.date,
           account: name.get(t.accountId) || "",
-          desc: t.desc,
+          description: t.description,
           credit: t.type === "credit" ? t.amount : 0,
           debit: t.type === "debit" ? t.amount : 0,
           balance: Math.round(bal[t.accountId] * 100) / 100,
@@ -373,7 +373,7 @@ export default function LedgerApp() {
       : txsWithBalance.map((tx) => ({
           date: tx.date,
           account: activeAcc?.name || "",
-          desc: tx.desc,
+          description: tx.description,
           credit: tx.type === "credit" ? tx.amount : 0,
           debit: tx.type === "debit" ? tx.amount : 0,
           balance: tx.runBal,
@@ -382,7 +382,7 @@ export default function LedgerApp() {
     const pdfRows = rows.map((r) => ({
       date: r.date,
       account: r.account,
-      desc: r.desc,
+      description: r.description,
       credit: r.credit ? fmtMoney(r.credit) : "",
       debit: r.debit ? fmtMoney(r.debit) : "",
       balance: fmtMoney(r.balance),
@@ -412,41 +412,35 @@ export default function LedgerApp() {
 
   const openExport = (scope) => { setExportScope(scope); setErr(""); setPanel("export"); };
 
+  // Import: every row goes to the account named in its own Account column (created if missing).
+  // Legacy .xls rows already carry the sheet name as their account.
   const doImport = async () => {
     let rows;
     try { rows = await importXlsx(); }
-    catch { setErr("Import failed"); return; }
-    if (!rows || rows.length === 0) return;
-    // One dialog: ask which account the imported rows belong to, then import all into it.
-    const distinct = [...new Set(rows.map((r) => (r.account || "").trim()))].filter(Boolean);
-    const nameKey = (s) => (s || "").trim().toLowerCase();
-    const existing = data.accounts.find((a) => nameKey(a.name) === nameKey(distinct[0]));
-    setImportName(existing ? existing.name : (distinct[0] || ""));
-    setImportRows(rows);
-    setErr(""); setPanel("import-acc");
-  };
+    catch { setNotice("Import failed"); return; }
+    if (!rows || rows.length === 0) { setNotice("Nothing to import"); return; }
 
-  const doConfirmImport = () => {
-    const target = (importName || "").trim();
-    if (!target) { setErr("Account name is required"); return; }
-    const nameKey = (s) => (s || "").trim().toLowerCase();
+    const nameKey = (x) => (x || "").trim().toLowerCase();
     const accs = [...data.accounts];
-    let acc = accs.find((a) => nameKey(a.name) === nameKey(target));
-    if (!acc) {
-      acc = { id: uid(), name: target, currency: "NPR", opening: 0, createdAt: new Date().toISOString() };
-      accs.push(acc);
-    }
+    const byKey = new Map(accs.map((a) => [nameKey(a.name), a]));
+    const existing = new Set(data.transactions.map((t) => `${t.accountId}|${t.date}|${t.description}|${t.amount}`));
     const imported = [];
-    let skipped = 0;
-    importRows.forEach((r) => {
-      const dup = data.transactions.some((t) =>
-        t.accountId === acc.id && t.date === r.date && t.desc === r.desc && t.amount === r.amount);
-      if (dup) { skipped++; return; }
-      imported.push({ id: uid(), accountId: acc.id, type: r.type, amount: r.amount, desc: r.desc, date: r.date, createdAt: new Date().toISOString() });
-    });
+    let skipped = 0, created = 0;
+
+    for (const r of rows) {
+      const key = nameKey(r.account);
+      if (!key) { skipped++; continue; }
+      let acc = byKey.get(key);
+      if (!acc) {
+        acc = { id: uid(), name: r.account.trim(), currency: "NPR", opening: 0, createdAt: new Date().toISOString() };
+        accs.push(acc); byKey.set(key, acc); created++;
+      }
+      if (existing.has(`${acc.id}|${r.date}|${r.description}|${r.amount}`)) { skipped++; continue; }
+      imported.push({ id: uid(), accountId: acc.id, type: r.type, amount: r.amount, description: r.description, date: r.date, createdAt: new Date().toISOString() });
+    }
+
     setData({ accounts: accs, transactions: [...data.transactions, ...imported] });
-    setImportRows(null); setImportName(""); closePanel();
-    setNotice(`${imported.length} imported, ${skipped} skipped`);
+    setNotice(`${imported.length} imported, ${skipped} skipped${created ? `, ${created} account${created !== 1 ? "s" : ""} created` : ""}`);
   };
 
   const requestDeleteAcc = (id) => { setConfirmId(id); setErr(""); setPanel("confirm-del"); };
@@ -481,13 +475,13 @@ export default function LedgerApp() {
 
   const openPanel = (type, txType = "credit") => {
     setErr(""); setEditTx(null);
-    if (type === "add-tx") setTxForm((f) => ({ ...f, type: txType, amount: "", desc: "" }));
+    if (type === "add-tx") setTxForm((f) => ({ ...f, type: txType, amount: "", description: "" }));
     setPanel(type);
   };
 
   const openEditTx = (tx) => {
     setErr(""); setEditTx(tx);
-    setTxForm({ type: tx.type, amount: tx.amount, desc: tx.desc, date: tx.date });
+    setTxForm({ type: tx.type, amount: tx.amount, description: tx.description, date: tx.date });
     setPanel("add-tx");
   };
 
@@ -753,7 +747,7 @@ export default function LedgerApp() {
                           {new Date(tx.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
                         </td>
                         <td style={{ padding: `${SP.feet.t}px 12px`, color: C.textPrimary, borderBottom: `1px solid ${C.border}` }}>
-                          {tx.desc}
+                          {tx.description}
                         </td>
                         <td style={{ padding: `${SP.feet.t}px 12px`, textAlign: "right", color: C.credit, fontWeight: tx.type === "credit" ? 600 : 400, borderBottom: `1px solid ${C.border}` }}>
                           {tx.type === "credit" ? fmtNum(tx.amount) : <span style={{ color: C.border }}>—</span>}
@@ -767,11 +761,11 @@ export default function LedgerApp() {
                         </td>
                         <td style={{ padding: `${SP.feet.t}px 8px`, textAlign: "right", borderBottom: `1px solid ${C.border}` }}>
                           <div style={{ display: "flex", gap: 2, justifyContent: "flex-end" }}>
-                            <button type="button" onClick={() => openEditTx(tx)} aria-label={`Edit transaction: ${tx.desc}`} className="iconbtn"
+                            <button type="button" onClick={() => openEditTx(tx)} aria-label={`Edit transaction: ${tx.description}`} className="iconbtn"
                               style={{ ...resetBtn, color: C.iconGhost, padding: 4, borderRadius: 4 }}>
                               <Pencil size={13} />
                             </button>
-                            <button type="button" onClick={() => requestDeleteTx(tx)} aria-label={`Delete transaction: ${tx.desc}`} className="iconbtn"
+                            <button type="button" onClick={() => requestDeleteTx(tx)} aria-label={`Delete transaction: ${tx.description}`} className="iconbtn"
                               style={{ ...resetBtn, color: C.iconGhost, padding: 4, borderRadius: 4 }}>
                               <Trash2 size={13} />
                             </button>
@@ -836,7 +830,7 @@ export default function LedgerApp() {
 
               {[
                 { label: `Amount (${RS})`, key: "amount", type: "number", placeholder: "0.00", id: "tx-amount" },
-                { label: "Description", key: "desc", type: "text", placeholder: "What is this for?", id: "tx-desc" },
+                { label: "Description", key: "description", type: "text", placeholder: "What is this for?", id: "tx-desc" },
                 { label: "Date", key: "date", type: "date", placeholder: "", id: "tx-date" },
               ].map((f) => (
                 <div key={f.key} style={{ marginBottom: 14 }}>
@@ -915,34 +909,6 @@ export default function LedgerApp() {
             </div>
           )}
 
-          {/* import-acc — choose account for imported rows */}
-          {panel === "import-acc" && (
-            <div role="dialog" aria-modal="true" aria-labelledby="importacc-title" className="dialog-pop"
-              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, boxShadow: C.shadowModal }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-                <div id="importacc-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Import to account</div>
-                <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 6, padding: 3 }}>
-                  <X size={17} color={C.textSecondary} />
-                </button>
-              </div>
-              <div style={{ marginBottom: 14 }}>
-                <label htmlFor="import-name" style={{ display: "block", fontSize: 11, color: C.textSecondary, textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 5 }}>Account name</label>
-                <input id="import-name" type="text" placeholder="e.g. Cash, Savings, Business…" value={importName}
-                  onChange={(e) => setImportName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && doConfirmImport()}
-                  style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: T.body, color: C.textPrimary, background: C.inputBg, boxSizing: "border-box", fontFamily: "inherit" }} />
-              </div>
-              <p style={{ margin: "0 0 14px", fontSize: 12, color: C.textSecondary }}>
-                {importRows ? importRows.length : 0} rows will import into this account. Existing account with same name will be reused.
-              </p>
-              {err && <div style={{ color: C.debit, fontSize: 12, marginBottom: 12 }}>{err}</div>}
-              <button type="button" onClick={doConfirmImport} className="press"
-                style={{ width: "100%", padding: 11, background: C.accent, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
-                Import
-              </button>
-            </div>
-          )}
-
           {/* export — format chooser */}
           {panel === "export" && (
             <div role="dialog" aria-modal="true" aria-labelledby="export-title" className="dialog-pop"
@@ -982,7 +948,7 @@ export default function LedgerApp() {
               </div>
               <div id="confirmtx-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Delete this entry?</div>
               <p id="confirmtx-desc" style={{ fontSize: T.body, color: C.textSecondary, margin: "8px 0 20px" }}>
-                {confirmTx.desc} · {RS}{fmtNum(confirmTx.amount)} on {new Date(confirmTx.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                {confirmTx.description} · {RS}{fmtNum(confirmTx.amount)} on {new Date(confirmTx.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
               </p>
               <div style={{ display: "flex", gap: 10 }}>
                 <button type="button" onClick={closePanel} id="confirm-cancel" className="press"

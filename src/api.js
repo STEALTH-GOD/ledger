@@ -1,54 +1,63 @@
-// Persistence bridge.
-//
+// Persistence + import/export for the web version (Supabase + Vercel).
+// Field names in the app match the table columns except for two camelCase → snake_case pairs
+// (accountId → account_id, createdAt → created_at). `description` is the same everywhere.
+import { createClient } from "@supabase/supabase-js";
+import * as XLSX from "xlsx";
 
-const K = "ledge:v1";
+const sb = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
-// Resolves true  → pywebview API is available, use SQLite bridge
-// Resolves false → browser dev mode, use localStorage
-const _bridgeReady = new Promise((resolve) => {
-  // Fast path: already injected (very rare, harmless to check)
-  if (window.pywebview?.api) {
-    resolve(true);
-    return;
-  }
-  // Normal path: wait for the event pywebview fires when its JS bridge is ready
-  window.addEventListener("pywebviewready", () => resolve(true), { once: true });
+// Never sync deletes unless the initial load succeeded. App.jsx swallows load errors and still
+// starts saving, so without this a failed load would look like "user deleted everything".
+let loadedOk = false;
 
-  // Timeout fallback: in `npm run dev` (no Python), pywebviewready never fires.
-  // 800 ms is plenty for pywebview to boot; in browser it just means localStorage.
-  setTimeout(() => resolve(!!window.pywebview?.api), 800);
-});
-
-async function getApi() {
-  await _bridgeReady;
-  return window.pywebview?.api ?? null;
-}
+const accToRow = (a) => ({ id: a.id, name: a.name, currency: a.currency || "NPR", opening: a.opening || 0, created_at: a.createdAt });
+const rowToAcc = (r) => ({ id: r.id, name: r.name, currency: r.currency, opening: Number(r.opening), createdAt: r.created_at });
+const txToRow = (t) => ({ id: t.id, account_id: t.accountId, type: t.type, amount: t.amount, description: t.description, date: t.date, created_at: t.createdAt });
+const rowToTx = (r) => ({ id: r.id, accountId: r.account_id, type: r.type, amount: Number(r.amount), description: r.description, date: r.date, createdAt: r.created_at });
 
 export async function loadData() {
-  const api = await getApi();
-  if (api) return api.get_data();
-  try { return localStorage.getItem(K); } catch { return null; }
+  const [a, t] = await Promise.all([
+    sb.from("accounts").select("*"),
+    sb.from("transactions").select("*"),
+  ]);
+  if (a.error) throw a.error;
+  if (t.error) throw t.error;
+  loadedOk = true;
+  return JSON.stringify({ accounts: a.data.map(rowToAcc), transactions: t.data.map(rowToTx) });
 }
 
 export async function saveData(json) {
-  const api = await getApi();
-  if (api) {
-    await api.set_data(json);
-    return;
-  }
-  try { localStorage.setItem(K, json); } catch {}
-}
+  if (!loadedOk) throw new Error("Not saved — the initial load failed. Reload the page.");
+  const { accounts, transactions } = JSON.parse(json);
 
-import * as XLSX from "xlsx";
+  // accounts first (FK), then transactions
+  let r = await sb.from("accounts").upsert(accounts.map(accToRow));
+  if (r.error) throw r.error;
+  r = await sb.from("transactions").upsert(transactions.map(txToRow));
+  if (r.error) throw r.error;
+
+  // rows deleted in the UI
+  const keepTx = new Set(transactions.map((t) => t.id));
+  const keepAcc = new Set(accounts.map((a) => a.id));
+  const [dbTx, dbAcc] = await Promise.all([
+    sb.from("transactions").select("id"),
+    sb.from("accounts").select("id"),
+  ]);
+  if (dbTx.error) throw dbTx.error;
+  if (dbAcc.error) throw dbAcc.error;
+  const goneTx = dbTx.data.map((x) => x.id).filter((id) => !keepTx.has(id));
+  const goneAcc = dbAcc.data.map((x) => x.id).filter((id) => !keepAcc.has(id));
+  if (goneTx.length) { const d = await sb.from("transactions").delete().in("id", goneTx); if (d.error) throw d.error; }
+  if (goneAcc.length) { const d = await sb.from("accounts").delete().in("id", goneAcc); if (d.error) throw d.error; }
+}
 
 const HEADERS = ["Date", "Account", "Description", "Credit", "Debit", "Balance"];
 
-// Packaged app: native dialog via Python. Browser dev: writes a real .xlsx via SheetJS.
 export async function exportXlsx({ rows, defaultName }) {
-  const api = await getApi();
-  if (api) return api.export_xlsx(JSON.stringify({ rows, defaultName }));
-
-  const wsData = [HEADERS, ...rows.map((r) => [r.date, r.account, r.desc, r.credit || 0, r.debit || 0, r.balance])];
+  const wsData = [HEADERS, ...rows.map((r) => [r.date, r.account, r.description, r.credit || 0, r.debit || 0, r.balance])];
   const ws = XLSX.utils.aoa_to_sheet(wsData);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Transactions");
@@ -56,19 +65,12 @@ export async function exportXlsx({ rows, defaultName }) {
   return `Downloaded ${rows.length} rows → ${defaultName}`;
 }
 
-export async function exportPdf({ rows, summary, single, defaultName }) {
-  const api = await getApi();
-  if (api) return api.export_pdf(JSON.stringify({ rows, summary, single, defaultName }));
-  // ponytail: no SheetJS-style fallback — no JS PDF dep in browser dev.
-  return "ERROR: PDF export needs the desktop app (no PDF in browser dev).";
+// No JS PDF dependency in the web build yet.
+export async function exportPdf() {
+  return "ERROR: PDF export isn't available in the web version yet.";
 }
 
-// Packaged app: native dialog. Browser dev: file input, reads real .xlsx via SheetJS.
 export async function importXlsx() {
-  const api = await getApi();
-  // pywebview JSON-parses return values already — never re-parse.
-  if (api) return (await api.import_xlsx()) || [];
-
   return new Promise((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
@@ -80,9 +82,8 @@ export async function importXlsx() {
       reader.onload = () => {
         try {
           const wb = XLSX.read(reader.result, { type: "array" });
-          const ws = wb.Sheets[wb.SheetNames[0]];
           const sheetName = wb.SheetNames[0];
-          const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false });
+          const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, raw: false });
           resolve(parseRows(rows, sheetName));
         } catch {
           resolve([]);
@@ -94,11 +95,15 @@ export async function importXlsx() {
   });
 }
 
-// Mirrors xlsx.py. Legacy .xls (Account Manager) is flagged by a leading "#" header
-// column; account = sheet name, columns are [#, Date, Description, Debit, Credit],
-// dates DD-MM-YYYY. Otherwise the export layout: Date, Account, Description, Credit, Debit, Balance.
+// Legacy .xls (Account Manager) is flagged by a leading "#" header column; account = sheet name,
+// columns [#, Date, Description, Debit, Credit], dates DD-MM-YYYY. Otherwise the export layout:
+// Date, Account, Description, Credit, Debit, Balance.
 const legacyHeader = (r) => r && r.length > 0 && String(r[0]).trim().toLowerCase() === "#";
-const fixDate = (s) => { /* DD-MM-YYYY → YYYY-MM-DD */ if (!s) return ""; const m = String(s).trim().match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/); return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : String(s).substring(0, 10); };
+const fixDate = (s) => {
+  if (!s) return "";
+  const m = String(s).trim().match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+  return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : String(s).substring(0, 10);
+};
 
 function parseRows(rows, sheetName) {
   const out = [];
@@ -106,27 +111,27 @@ function parseRows(rows, sheetName) {
   for (const r of rows.slice(1)) {
     if (!r || r.length === 0) continue;
     if (isLegacy) {
-      const [, date, desc, debit, credit] = r;
-      if (!desc) continue; // Total / Balance / footer rows
+      const [, date, description, debit, credit] = r;
+      if (!description) continue; // Total / Balance / footer rows
       const d = parseFloat(debit) || 0, c = parseFloat(credit) || 0;
       if (c <= 0 && d <= 0) continue;
       out.push({
         account: String(sheetName || "").trim(),
         date: fixDate(date),
-        desc: String(desc).trim(),
+        description: String(description).trim(),
         type: c > 0 ? "credit" : "debit",
         amount: c > 0 ? c : d,
       });
       continue;
     }
-    const [date, account, desc, credit, debit] = r;
-    if (!account || !desc) continue;
+    const [date, account, description, credit, debit] = r;
+    if (!account || !description) continue;
     const c = parseFloat(credit) || 0, d = parseFloat(debit) || 0;
     if (c <= 0 && d <= 0) continue;
     out.push({
       account: String(account).trim(),
       date: String(date || "").substring(0, 10),
-      desc: String(desc).trim(),
+      description: String(description).trim(),
       type: c > 0 ? "credit" : "debit",
       amount: c > 0 ? c : d,
     });
