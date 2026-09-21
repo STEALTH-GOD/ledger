@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import {
   Plus, Trash2, ArrowUpRight, ArrowDownLeft, LayoutDashboard, BarChart2,
-  BookOpen, ChevronLeft, ChevronRight, X, Wallet, AlertTriangle, Download, Upload, Pencil, FileSpreadsheet, FileText, Search, LogOut,
+  BookOpen, ChevronLeft, ChevronRight, X, Wallet, AlertTriangle, Download, Upload, Pencil, FileSpreadsheet, FileText, Search, LogOut, Menu,
 } from "lucide-react";
 import { loadData, saveData, exportXlsx, exportPdf, importXlsx, onAuthChange, signIn, signUp, signOut } from "./api.js";
 import { C, T, SP, ACCENT_COLORS, fmtNum } from "./theme.js";
@@ -14,6 +14,20 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 
 const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
 const todayStr = () => new Date().toISOString().split("T")[0];
+
+// True below the tablet breakpoint; updates live on rotate / resize.
+function useIsMobile(bp = 768) {
+  const q = `(max-width: ${bp}px)`;
+  const [m, setM] = useState(() => typeof window !== "undefined" && window.matchMedia(q).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(q);
+    const on = () => setM(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, [q]);
+  return m;
+}
 
 // Shared button base (font inherited, no background) so focus ring + font are consistent everywhere.
 const resetBtn = {
@@ -167,6 +181,19 @@ input:focus {
   .stagger > * { animation: none; }
   .stat-card, .acc-row { transform: none !important; transition: none !important; }
 }
+
+/* ── Mobile ── */
+button { touch-action: manipulation; }
+.nav-drawer { transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), visibility 0s linear 0.22s; }
+.nav-drawer.open { transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), visibility 0s; }
+@media (prefers-reduced-motion: reduce) { .nav-drawer, .nav-drawer.open { transition: none; } }
+@media (max-width: 768px) {
+  input, select, textarea { font-size: 16px !important; } /* stops iOS zooming on focus */
+  .iconbtn { min-width: 40px; min-height: 40px; justify-content: center; }
+  .press { min-height: 40px; }
+  .snav { padding: 12px 10px; font-size: 14px; }
+  .scta { padding: 12px; font-size: 13px; }
+}
 `;
 
 function Ledger({ email, onSignOut }) {
@@ -187,6 +214,9 @@ function Ledger({ email, onSignOut }) {
   const [err, setErr] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [notice, setNotice] = useState("");
+  const isMobile = useIsMobile();
+  const [navOpen, setNavOpen] = useState(false);
+  const pad = isMobile ? SP.lg : SP.pagePad; // page gutter
   const saveTimer = useRef(null);
   const panelRef = useRef(null);
 
@@ -248,6 +278,15 @@ function Ledger({ email, onSignOut }) {
     const t = setTimeout(() => setNotice(""), 3000);
     return () => clearTimeout(t);
   }, [notice]);
+
+  // Mobile drawer: close on any navigation / dialog, and on Escape.
+  useEffect(() => { setNavOpen(false); }, [view, activeId, panel, isMobile]);
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e) => { if (e.key === "Escape") setNavOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [navOpen]);
 
   const activeAcc = useMemo(() => data.accounts.find((a) => a.id === activeId), [data.accounts, activeId]);
 
@@ -486,7 +525,7 @@ function Ledger({ email, onSignOut }) {
   };
 
   if (!loaded) return (
-    <div style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
+    <div style={{ display: "flex", height: "100dvh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
       <div style={{ width: 280, display: "flex", flexDirection: "column", gap: 10 }}>
         <div className="skel" style={{ height: 16, width: "55%" }} />
         <div className="skel" style={{ height: 14 }} />
@@ -503,11 +542,17 @@ function Ledger({ email, onSignOut }) {
   const confirmTxCount = confirmAcc ? data.transactions.filter((t) => t.accountId === confirmAcc.id).length : 0;
 
   return (
-    <div style={{ display: "flex", height: "100vh", fontFamily: "'Segoe UI', system-ui, sans-serif", background: C.bg, overflow: "hidden", position: "relative" }}>
+    <div style={{ display: "flex", height: "100dvh", fontFamily: "'Segoe UI', system-ui, sans-serif", background: C.bg, overflow: "hidden", position: "relative" }}>
       <style>{globalCss}</style>
 
       {/* ── Sidebar ── */}
-      <aside aria-label="Primary" style={{ width: 220, background: C.sidebar, display: "flex", flexDirection: "column", flexShrink: 0, borderRight: `1px solid ${C.sidebarBorder}` }}>
+      {isMobile && navOpen && (
+        <div onClick={() => setNavOpen(false)} aria-hidden="true"
+          style={{ position: "fixed", inset: 0, background: "rgba(10,8,12,0.45)", zIndex: 140 }} />
+      )}
+      <aside aria-label="Primary" id="primary-nav" className={isMobile ? "nav-drawer" + (navOpen ? " open" : "") : undefined}
+        style={{ width: isMobile ? "min(280px, 85vw)" : 220, background: C.sidebar, display: "flex", flexDirection: "column", flexShrink: 0, borderRight: `1px solid ${C.sidebarBorder}`,
+          ...(isMobile ? { position: "fixed", top: 0, bottom: 0, left: 0, zIndex: 150, transform: navOpen ? "translateX(0)" : "translateX(-100%)", visibility: navOpen ? "visible" : "hidden" } : {}) }}>
         <div style={{ padding: "20px 18px 16px", borderBottom: `1px solid ${C.sidebarBorder}` }}>
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
             <div style={{ width: 30, height: 30, background: C.accent, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -557,7 +602,7 @@ function Ledger({ email, onSignOut }) {
               className="press" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px", background: "rgba(255,255,255,0.06)", color: C.sidebarText, border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
               <Download size={13} /> Export
             </button>
-            <button type="button" onClick={doImport} aria-label="Import from Excel"
+            <button type="button" onClick={() => { setNavOpen(false); doImport(); }} aria-label="Import from Excel"
               className="press" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px", background: "rgba(255,255,255,0.06)", color: C.sidebarText, border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
               <Upload size={13} /> Import
             </button>
@@ -572,11 +617,23 @@ function Ledger({ email, onSignOut }) {
       </aside>
 
       {/* ── Main ── */}
-      <main style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
+      <main style={{ flex: 1, minWidth: 0, overflow: "auto", display: "flex", flexDirection: "column" }}>
+        {isMobile && (
+          <div style={{ position: "sticky", top: 0, zIndex: 50, flexShrink: 0, display: "flex", alignItems: "center", gap: SP.sm, padding: `${SP.sm}px ${SP.md}px`, background: C.card, borderBottom: `1px solid ${C.border}` }}>
+            <button type="button" onClick={() => setNavOpen(true)} aria-label="Open menu" aria-expanded={navOpen} aria-controls="primary-nav" className="iconbtn"
+              style={{ ...resetBtn, padding: 6, borderRadius: 6 }}>
+              <Menu size={20} color={C.textPrimary} />
+            </button>
+            <div style={{ width: 24, height: 24, background: C.accent, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <BookOpen size={13} color="#fff" />
+            </div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: C.textPrimary }}>Ledger Book</div>
+          </div>
+        )}
 
         {/* Dashboard */}
         {view === "dashboard" && (
-          <div className="view-in" style={{ padding: `${SP.xl}px ${SP.pagePad}px`, flex: 1 }}>
+          <div className="view-in" style={{ padding: `${SP.xl}px ${pad}px`, flex: 1 }}>
             <div style={{ marginBottom: SP.xl }}>
               <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: C.textPrimary }}>Dashboard</h1>
               <p style={{ margin: "4px 0 0", fontSize: 13, color: C.textSecondary }}>{data.accounts.length} account{data.accounts.length !== 1 ? "s" : ""} · {data.transactions.length} transaction{data.transactions.length !== 1 ? "s" : ""}</p>
@@ -596,7 +653,7 @@ function Ledger({ email, onSignOut }) {
             ) : (
               <>
                 {/* Summary Stats */}
-                <div className="stagger" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: SP.md, marginBottom: SP.sectionGap }}>
+                <div className="stagger" style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)", gap: SP.md, marginBottom: SP.sectionGap }}>
                   {[
                     { label: "Total Credit (In)", val: totals.credit, color: C.credit, pre: "+" },
                     { label: "Total Debit (Out)", val: totals.debit, color: C.debit, pre: "-" },
@@ -636,17 +693,17 @@ function Ledger({ email, onSignOut }) {
                       <div key={acc.id} className="acc-row"
                         style={{ "--i": i, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.md}px ${SP.cardPad.md}px`, width: "100%", display: "flex", alignItems: "center", gap: SP.md }}>
                         <button type="button" onClick={() => openAcc(acc.id)}
-                          style={{ ...resetBtn, flex: 1, minWidth: 0, gap: SP.md, alignItems: "center" }}>
+                          style={{ ...resetBtn, flex: 1, minWidth: 0, gap: SP.md, alignItems: "center", flexWrap: isMobile ? "wrap" : "nowrap" }}>
                           <div style={{ width: 38, height: 38, borderRadius: "50%", background: ACCENT_COLORS[i % ACCENT_COLORS.length] + "18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: ACCENT_COLORS[i % ACCENT_COLORS.length], flexShrink: 0 }}>
                             {acc.name.charAt(0).toUpperCase()}
                           </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 14, fontWeight: 600, color: C.textPrimary }}>{acc.name}</div>
+                            <div style={{ fontSize: 14, fontWeight: 600, color: C.textPrimary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{acc.name}</div>
                             <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2 }}>
                               {acc.count} entr{acc.count !== 1 ? "ies" : "y"}
                             </div>
                           </div>
-                          <div style={{ textAlign: "right" }}>
+                          <div style={isMobile ? { width: "100%", display: "flex", justifyContent: "space-between", alignItems: "baseline" } : { textAlign: "right" }}>
                             <div style={{ fontSize: 16, fontWeight: 700, color: acc.balance >= 0 ? C.credit : C.debit }}>
                               {RS}{fmtNum(acc.balance)}
                             </div>
@@ -656,7 +713,7 @@ function Ledger({ email, onSignOut }) {
                               <span style={{ color: C.debit }}>-{fmtNum(acc.debit)}</span>
                             </div>
                           </div>
-                          <ChevronRight size={15} color={C.iconMuted} />
+                          {!isMobile && <ChevronRight size={15} color={C.iconMuted} />}
                         </button>
                         <button type="button" onClick={() => requestRenameAcc(acc.id)} aria-label={`Rename ${acc.name}`} className="iconbtn"
                           style={{ ...resetBtn, color: C.textSecondary, padding: 4, borderRadius: 6, flexShrink: 0 }}>
@@ -674,8 +731,8 @@ function Ledger({ email, onSignOut }) {
         {/* Account Detail */}
         {view === "account" && activeAcc && (
           <div className="view-in" style={{ display: "flex", flexDirection: "column", flex: 1 }}>
-            <div style={{ padding: `${SP.xl}px ${SP.pagePad}px 0`, background: C.card, borderBottom: `1px solid ${C.border}` }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: SP.lg }}>
+            <div style={{ padding: `${SP.xl}px ${pad}px 0`, background: C.card, borderBottom: `1px solid ${C.border}` }}>
+              <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "stretch" : "center", justifyContent: "space-between", gap: isMobile ? SP.md : 0, marginBottom: SP.lg }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <button type="button" onClick={() => setView("dashboard")} aria-label="Back to dashboard" className="iconbtn"
                     style={{ ...resetBtn, color: C.textSecondary, padding: 4, borderRadius: 6 }}>
@@ -688,11 +745,11 @@ function Ledger({ email, onSignOut }) {
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <button type="button" onClick={() => openPanel("add-tx", "credit")} className="press"
-                    style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 14px", background: C.credit, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                    style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 14px", ...(isMobile ? { flex: 1, justifyContent: "center" } : {}), background: C.credit, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                     <ArrowDownLeft size={13} /> Credit (In)
                   </button>
                   <button type="button" onClick={() => openPanel("add-tx", "debit")} className="press"
-                    style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 14px", background: C.debit, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                    style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 14px", ...(isMobile ? { flex: 1, justifyContent: "center" } : {}), background: C.debit, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
                     <ArrowUpRight size={13} /> Debit (Out)
                   </button>
                   <button type="button" onClick={() => openExport(activeAcc.id)} aria-label={`Export ${activeAcc.name}`} className="iconbtn"
@@ -706,13 +763,13 @@ function Ledger({ email, onSignOut }) {
                 </div>
               </div>
 
-              <div style={{ display: "flex", gap: SP.md, paddingBottom: SP.lg }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: SP.md, paddingBottom: SP.lg }}>
                 {[
                   { label: "Total Credit", val: activeStat?.credit || 0, color: C.credit },
                   { label: "Total Debit", val: activeStat?.debit || 0, color: C.debit },
                   { label: "Balance", val: Math.abs(activeStat?.balance || 0), color: (activeStat?.balance || 0) >= 0 ? C.credit : C.debit },
                 ].map((s, i) => (
-                  <div key={i} className="stat-card" style={{ flex: 1, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.lg}px ${SP.cardPad.md}px` }}>
+                  <div key={i} className="stat-card" style={{ flex: isMobile ? "1 1 calc(50% - 6px)" : 1, minWidth: 0, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.lg}px ${SP.cardPad.md}px` }}>
                     <div style={{ fontSize: 11, color: C.textSecondary, textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: SP.sm }}>{s.label}</div>
                     <div style={{ fontSize: 16, color: s.color, fontWeight: 700 }}>{RS}{fmtNum(s.val)}</div>
                   </div>
@@ -720,12 +777,41 @@ function Ledger({ email, onSignOut }) {
               </div>
             </div>
 
-            <div style={{ flex: 1, overflow: "auto", padding: `0 ${SP.pagePad}px ${SP.xxl}px` }}>
+            <div style={{ flex: 1, overflow: "auto", padding: `0 ${pad}px ${SP.xxl}px` }}>
               {txsWithBalance.length === 0 ? (
                 <div style={{ textAlign: "center", padding: "80px 0", color: C.textSecondary }}>
                   <div style={{ fontSize: 14, marginBottom: 6 }}>No transactions yet</div>
                   <div style={{ fontSize: 12 }}>Use the Credit / Debit buttons above to record entries</div>
                 </div>
+              ) : isMobile ? (
+                <ul style={{ listStyle: "none", margin: `${SP.md}px 0 0`, padding: 0, display: "flex", flexDirection: "column", gap: SP.sm }}>
+                  {txsWithBalance.map((tx) => (
+                    <li key={tx.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.md}px ${SP.lg}px` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: SP.md }}>
+                        <div style={{ fontSize: 14, fontWeight: 600, color: C.textPrimary, minWidth: 0, overflowWrap: "anywhere" }}>{tx.description}</div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: tx.type === "credit" ? C.credit : C.debit, flexShrink: 0 }}>
+                          {tx.type === "credit" ? "+" : "-"}{fmtNum(tx.amount)}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: SP.xs }}>
+                        <div style={{ fontSize: 12, color: tx.runBal < 0 ? C.debit : C.textSecondary }}>
+                          {new Date(tx.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                          {" · "}Bal {tx.runBal < 0 ? "Dr " : ""}{fmtNum(tx.runBal)}
+                        </div>
+                        <div style={{ display: "flex", gap: 2, margin: "-8px -8px -8px 0" }}>
+                          <button type="button" onClick={() => openEditTx(tx)} aria-label={`Edit transaction: ${tx.description}`} className="iconbtn"
+                            style={{ ...resetBtn, color: C.iconGhost, padding: 4, borderRadius: 4 }}>
+                            <Pencil size={14} />
+                          </button>
+                          <button type="button" onClick={() => requestDeleteTx(tx)} aria-label={`Delete transaction: ${tx.description}`} className="iconbtn"
+                            style={{ ...resetBtn, color: C.iconGhost, padding: 4, borderRadius: 4 }}>
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
               ) : (
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: T.body, marginTop: SP.lg }}>
                   <thead>
@@ -789,7 +875,7 @@ function Ledger({ email, onSignOut }) {
         {/* Charts */}
         {view === "charts" && (
           <Suspense fallback={
-            <div className="view-in" style={{ padding: `${SP.xl}px ${SP.pagePad}px`, flex: 1, color: C.textSecondary, fontSize: 13 }}>
+            <div className="view-in" style={{ padding: `${SP.xl}px ${pad}px`, flex: 1, color: C.textSecondary, fontSize: 13 }}>
               <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: C.textPrimary }}>Charts</h1>
               <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 10 }}>
                 <div className="skel" style={{ height: 14, width: "100%" }} />
@@ -810,7 +896,7 @@ function Ledger({ email, onSignOut }) {
           {/* add-tx */}
           {panel === "add-tx" && activeAcc && (
             <div role="dialog" aria-modal="true" aria-labelledby="addtx-title" className="dialog-pop"
-              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, boxShadow: C.shadowModal }}>
+              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
                 <div id="addtx-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>{editTx ? "Edit entry" : "Add entry"} — {activeAcc.name}</div>
                 <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 6, padding: 3 }}>
@@ -860,7 +946,7 @@ function Ledger({ email, onSignOut }) {
           {/* add-acc */}
           {panel === "add-acc" && (
             <div role="dialog" aria-modal="true" aria-labelledby="addacc-title" className="dialog-pop"
-              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, boxShadow: C.shadowModal }}>
+              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
                 <div id="addacc-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>New account</div>
                 <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 6, padding: 3 }}>
@@ -893,7 +979,7 @@ function Ledger({ email, onSignOut }) {
           {/* rename-acc */}
           {panel === "rename-acc" && rename && (
             <div role="dialog" aria-modal="true" aria-labelledby="rename-acc-title" className="dialog-pop"
-              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, boxShadow: C.shadowModal }}>
+              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
                 <div id="rename-acc-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Rename account</div>
                 <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 6, padding: 3 }}>
@@ -918,7 +1004,7 @@ function Ledger({ email, onSignOut }) {
           {/* export — format chooser */}
           {panel === "export" && (
             <div role="dialog" aria-modal="true" aria-labelledby="export-title" className="dialog-pop"
-              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, boxShadow: C.shadowModal }}>
+              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                 <div id="export-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Export</div>
                 <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 6, padding: 3 }}>
@@ -948,7 +1034,7 @@ function Ledger({ email, onSignOut }) {
           {/* confirm-del-tx */}
           {panel === "confirm-del-tx" && confirmTx && (
             <div role="alertdialog" aria-modal="true" aria-labelledby="confirmtx-title" aria-describedby="confirmtx-desc" className="dialog-pop"
-              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, boxShadow: C.shadowModal, textAlign: "center" }}>
+              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal, textAlign: "center" }}>
               <div style={{ width: 48, height: 48, background: C.debitBg, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px" }}>
                 <AlertTriangle size={22} color={C.debit} />
               </div>
@@ -972,7 +1058,7 @@ function Ledger({ email, onSignOut }) {
           {/* confirm-del */}
           {panel === "confirm-del" && confirmAcc && (
             <div role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-desc" className="dialog-pop"
-              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, boxShadow: C.shadowModal, textAlign: "center" }}>
+              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal, textAlign: "center" }}>
               <div style={{ width: 48, height: 48, background: C.debitBg, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px" }}>
                 <AlertTriangle size={22} color={C.debit} />
               </div>
@@ -998,7 +1084,7 @@ function Ledger({ email, onSignOut }) {
       {/* Export/import toast */}
       {notice && (
         <div role="status" aria-live="polite" className="dialog-pop"
-          style={{ position: "fixed", top: SP.lg, right: SP.lg, zIndex: 300, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 16px", fontSize: 13, color: C.textPrimary, boxShadow: C.shadowModal }}>
+          style={{ position: "fixed", top: SP.lg, right: SP.lg, ...(isMobile ? { left: SP.lg } : {}), zIndex: 300, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 16px", fontSize: 13, color: C.textPrimary, boxShadow: C.shadowModal }}>
           {notice}
         </div>
       )}
@@ -1040,7 +1126,7 @@ function Login() {
   );
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif", padding: SP.lg }}>
+    <div style={{ display: "flex", minHeight: "100dvh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif", padding: SP.lg }}>
       <style>{globalCss}</style>
       <div className="dialog-pop" style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, maxWidth: "100%", boxShadow: C.shadowModal }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 22 }}>
@@ -1080,7 +1166,7 @@ export default function LedgerApp() {
   useEffect(() => onAuthChange(setSession), []);
 
   if (session === undefined) return (
-    <div style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif", color: C.textSecondary, fontSize: 13 }}>
+    <div style={{ display: "flex", height: "100dvh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif", color: C.textSecondary, fontSize: 13 }}>
       <style>{globalCss}</style>
       Loading…
     </div>
