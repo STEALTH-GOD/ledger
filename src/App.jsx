@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import {
   Plus, Trash2, ArrowUpRight, ArrowDownLeft, LayoutDashboard, BarChart2,
-  BookOpen, ChevronLeft, ChevronRight, X, Wallet, AlertTriangle, Download, Upload, Pencil, FileSpreadsheet, FileText, Search,
+  BookOpen, ChevronLeft, ChevronRight, X, Wallet, AlertTriangle, Download, Upload, Pencil, FileSpreadsheet, FileText, Search, LogOut,
 } from "lucide-react";
-import { loadData, saveData, exportXlsx, exportPdf, importXlsx } from "./api.js";
+import { loadData, saveData, exportXlsx, exportPdf, importXlsx, onAuthChange, signIn, signUp, signOut } from "./api.js";
 import { C, T, SP, ACCENT_COLORS, fmtNum } from "./theme.js";
 
 // Code-split: recharts + lucide-heavy chart view loaded only when Charts is opened.
@@ -169,7 +169,7 @@ input:focus {
 }
 `;
 
-export default function LedgerApp() {
+function Ledger({ email, onSignOut }) {
   const [data, setData] = useState({ accounts: [], transactions: [] });
   const [view, setView] = useState("dashboard");
   const [activeId, setActiveId] = useState(null);
@@ -560,6 +560,12 @@ export default function LedgerApp() {
             <button type="button" onClick={doImport} aria-label="Import from Excel"
               className="press" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px", background: "rgba(255,255,255,0.06)", color: C.sidebarText, border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
               <Upload size={13} /> Import
+            </button>
+          </div>
+          <div style={{ marginTop: 6, paddingTop: 10, borderTop: `1px solid ${C.sidebarBorder}` }}>
+            <div title={email} style={{ fontSize: 11, color: C.sidebarLabel, padding: "0 10px 6px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{email}</div>
+            <button type="button" onClick={onSignOut} className="snav">
+              <LogOut size={14} strokeWidth={1.8} /> Sign out
             </button>
           </div>
         </div>
@@ -998,4 +1004,88 @@ export default function LedgerApp() {
       )}
     </div>
   );
+}
+
+// ── Login ────────────────────────────────────────────────
+function Login() {
+  const [mode, setMode] = useState("in"); // "in" | "up"
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState({ kind: "", text: "" });
+
+  const submit = async () => {
+    if (!email.trim() || !password) { setMsg({ kind: "err", text: "Enter your email and password" }); return; }
+    setBusy(true); setMsg({ kind: "", text: "" });
+    try {
+      const { data, error } = mode === "in"
+        ? await signIn(email.trim(), password)
+        : await signUp(email.trim(), password);
+      if (error) setMsg({ kind: "err", text: error.message });
+      else if (mode === "up" && !data.session) setMsg({ kind: "ok", text: "Account created. Check your email to confirm it, then sign in." });
+    } catch (e) {
+      setMsg({ kind: "err", text: e?.message || "Something went wrong" });
+    }
+    setBusy(false);
+  };
+
+  const field = (label, id, type, value, set, auto) => (
+    <div style={{ marginBottom: 14 }}>
+      <label htmlFor={id} style={{ display: "block", fontSize: 11, color: C.textSecondary, textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 5 }}>{label}</label>
+      <input id={id} type={type} value={value} autoComplete={auto}
+        onChange={(e) => set(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && submit()}
+        style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: T.body, color: C.textPrimary, background: C.inputBg, boxSizing: "border-box", fontFamily: "inherit" }} />
+    </div>
+  );
+
+  return (
+    <div style={{ display: "flex", minHeight: "100vh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif", padding: SP.lg }}>
+      <style>{globalCss}</style>
+      <div className="dialog-pop" style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, maxWidth: "100%", boxShadow: C.shadowModal }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 22 }}>
+          <div style={{ width: 32, height: 32, background: C.accent, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <BookOpen size={16} color="#fff" />
+          </div>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Ledger Book</div>
+            <div style={{ fontSize: 12, color: C.textSecondary }}>{mode === "in" ? "Sign in to your ledger" : "Create your account"}</div>
+          </div>
+        </div>
+
+        {field("Email", "auth-email", "email", email, setEmail, "email")}
+        {field("Password", "auth-password", "password", password, setPassword, mode === "in" ? "current-password" : "new-password")}
+
+        {msg.text && (
+          <div role={msg.kind === "err" ? "alert" : "status"} style={{ fontSize: 12, marginBottom: 12, color: msg.kind === "err" ? C.debit : C.credit }}>{msg.text}</div>
+        )}
+
+        <button type="button" onClick={submit} disabled={busy} className="press"
+          style={{ width: "100%", padding: 11, background: C.accent, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
+          {busy ? "Please wait…" : mode === "in" ? "Sign in" : "Create account"}
+        </button>
+
+        <button type="button" onClick={() => { setMode(mode === "in" ? "up" : "in"); setMsg({ kind: "", text: "" }); }}
+          style={{ ...resetBtn, justifyContent: "center", width: "100%", marginTop: 14, fontSize: 13, color: C.accent, fontWeight: 600 }}>
+          {mode === "in" ? "New here? Create an account" : "Have an account? Sign in"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Auth gate (default export, used by main.jsx) ─────────
+export default function LedgerApp() {
+  const [session, setSession] = useState(undefined); // undefined = still checking, null = signed out
+  useEffect(() => onAuthChange(setSession), []);
+
+  if (session === undefined) return (
+    <div style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif", color: C.textSecondary, fontSize: 13 }}>
+      <style>{globalCss}</style>
+      Loading…
+    </div>
+  );
+  if (!session) return <Login />;
+  // key = user id: switching accounts fully resets in-memory ledger state
+  return <Ledger key={session.user.id} email={session.user.email} onSignOut={signOut} />;
 }

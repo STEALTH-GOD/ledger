@@ -13,6 +13,16 @@ const sb = createClient(
 // starts saving, so without this a failed load would look like "user deleted everything".
 let loadedOk = false;
 
+// ── Auth (email + password) ─────────────────────────────
+// onAuthChange fires once immediately with the current session (or null), then on every change.
+export const onAuthChange = (cb) => {
+  const { data } = sb.auth.onAuthStateChange((_event, session) => cb(session));
+  return () => data.subscription.unsubscribe();
+};
+export const signIn = (email, password) => sb.auth.signInWithPassword({ email, password });
+export const signUp = (email, password) => sb.auth.signUp({ email, password });
+export const signOut = async () => { loadedOk = false; await sb.auth.signOut(); };
+
 const accToRow = (a) => ({ id: a.id, name: a.name, currency: a.currency || "NPR", opening: a.opening || 0, created_at: a.createdAt });
 const rowToAcc = (r) => ({ id: r.id, name: r.name, currency: r.currency, opening: Number(r.opening), createdAt: r.created_at });
 const txToRow = (t) => ({ id: t.id, account_id: t.accountId, type: t.type, amount: t.amount, description: t.description, date: t.date, created_at: t.createdAt });
