@@ -8,6 +8,8 @@
 //   • a rejected row is isolated and reported; it can't block the rest.
 import { createClient } from "@supabase/supabase-js";
 import * as XLSX from "xlsx";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
 import { validYmd } from "./util.js";
 
 const sb = createClient(
@@ -210,9 +212,101 @@ export async function exportXlsx({ rows, defaultName }) {
   return `Downloaded ${rows.length} rows → ${defaultName}`;
 }
 
-// No JS PDF dependency in the web build yet.
-export async function exportPdf() {
-  return "ERROR: PDF export isn't available in the web version yet.";
+// ── PDF export (client-side, via jsPDF + jspdf-autotable) ──────────────
+// Runs entirely in the browser — no server / Python dependency, so it works the same on Vercel
+// as it does locally. `rows` here are the *pdfRows* built in App.jsx: money already formatted as
+// display strings ("Rs. 1,234.56" / "") so this function only lays them out, it doesn't format.
+const PDF_MARGIN = 40;
+
+function drawHeader(doc, { title, subtitle }) {
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(16);
+  doc.setTextColor(26, 23, 20); // C.textPrimary
+  doc.text(title, PDF_MARGIN, 44);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(98, 100, 106); // C.textSecondary
+  doc.text(subtitle, PDF_MARGIN, 60);
+  const genLine = `Generated ${new Date().toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}`;
+  doc.text(genLine, doc.internal.pageSize.getWidth() - PDF_MARGIN, 60, { align: "right" });
+}
+
+function drawSummary(doc, y, summary) {
+  const chips = [
+    ["Total Credit", summary.credit, [26, 122, 74]],   // C.credit
+    ["Total Debit", summary.debit, [192, 57, 43]],      // C.debit
+    ["Balance", summary.balance, [26, 23, 20]],
+  ];
+  const pageW = doc.internal.pageSize.getWidth();
+  const gap = 16;
+  const w = (pageW - PDF_MARGIN * 2 - gap * 2) / 3;
+  chips.forEach(([label, value, color], i) => {
+    const x = PDF_MARGIN + i * (w + gap);
+    doc.setDrawColor(226, 228, 231); // C.border
+    doc.setFillColor(250, 251, 252); // C.zebra
+    doc.roundedRect(x, y, w, 44, 4, 4, "FD");
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(98, 100, 106);
+    doc.text(label.toUpperCase(), x + 10, y + 16);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(12);
+    doc.setTextColor(...color);
+    doc.text(String(value), x + 10, y + 33);
+  });
+  return y + 44;
+}
+
+export async function exportPdf({ rows, summary, single, defaultName }) {
+  if (!rows || rows.length === 0) return "ERROR: Nothing to export";
+
+  const doc = new jsPDF({ orientation: single ? "portrait" : "landscape", unit: "pt", format: "a4" });
+  const title = "Ledger Book";
+  const subtitle = single ? "Account statement" : "All accounts";
+  drawHeader(doc, { title, subtitle });
+
+  let startY = 78;
+  if (summary) startY = drawSummary(doc, startY, summary) + 20;
+
+  const head = single
+    ? [["Date", "Description", "Credit", "Debit", "Balance"]]
+    : [["Date", "Account", "Description", "Credit", "Debit", "Balance"]];
+  const body = rows.map((r) => (single
+    ? [r.date, r.description, r.credit, r.debit, r.balance]
+    : [r.date, r.account, r.description, r.credit, r.debit, r.balance]));
+
+  const moneyCols = single ? [2, 3, 4] : [3, 4, 5];
+
+  autoTable(doc, {
+    startY,
+    head,
+    body,
+    margin: { left: PDF_MARGIN, right: PDF_MARGIN },
+    styles: { fontSize: 9, cellPadding: 6, textColor: [26, 23, 20], lineColor: [226, 228, 231], lineWidth: 0.5 },
+    headStyles: { fillColor: [24, 22, 26], textColor: [240, 237, 232], fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [250, 251, 252] },
+    columnStyles: Object.fromEntries(moneyCols.map((c) => [c, { halign: "right" }])),
+    didParseCell: (data) => {
+      if (data.section !== "body") return;
+      const col = data.column.index;
+      if (col === moneyCols[0]) data.cell.styles.textColor = [26, 122, 74];       // credit
+      else if (col === moneyCols[1]) data.cell.styles.textColor = [192, 57, 43];  // debit
+    },
+    didDrawPage: () => {
+      const pageH = doc.internal.pageSize.getHeight();
+      const pageW = doc.internal.pageSize.getWidth();
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(150, 150, 150);
+      doc.text(
+        `Page ${doc.internal.getNumberOfPages()}`,
+        pageW - PDF_MARGIN, pageH - 20, { align: "right" }
+      );
+    },
+  });
+
+  doc.save(defaultName);
+  return `Downloaded ${rows.length} rows → ${defaultName}`;
 }
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024, MAX_ROWS = 20000;

@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import { loadData, initSync, startSync, disposeSync, enqueue, flush, retryNow, dismissError, mutationSeq, exportXlsx, exportPdf, importXlsx, onAuthChange, signIn, signUp, signOut } from "./api.js";
 import { toC, fromC, todayStr, isValidYmd, fmtDate, parseMoney } from "./util.js";
-import { C, T, SP, ACCENT_COLORS, fmtNum } from "./theme.js";
+import { C, T, SP, FONT, FONT_IMPORT_URL, ACCENT_COLORS, fmtNum } from "./theme.js";
 
 // Code-split: recharts + lucide-heavy chart view loaded only when Charts is opened.
 const ChartsView = lazy(() => import("./views/Charts.jsx"));
@@ -43,12 +43,41 @@ const resetBtn = {
   alignItems: "center",
 };
 
+// A quiet caption used above form fields and table columns — sentence case, no tracking.
+const captionStyle = { display: "block", fontSize: 11.5, color: C.textSecondary, marginBottom: 5 };
+
+// Three figures laid out as a single ruled line (a ledger's own summary/footing convention)
+// instead of three identical boxed cards. Divided by a hairline, not a background or a shadow.
+function StatStrip({ items, isMobile }) {
+  return (
+    <div style={{
+      display: "flex", flexDirection: isMobile ? "column" : "row",
+      border: `1px solid ${C.border}`, borderTop: `2px solid ${C.textPrimary}`,
+    }}>
+      {items.map((s, i) => (
+        <div key={i} style={{
+          flex: 1, minWidth: 0, padding: `${SP.lg}px ${SP.cardPad.md}px`,
+          borderRight: !isMobile && i < items.length - 1 ? `1px solid ${C.border}` : "none",
+          borderBottom: isMobile && i < items.length - 1 ? `1px solid ${C.border}` : "none",
+        }}>
+          <div style={{ fontSize: 11.5, color: C.textSecondary, marginBottom: SP.sm }}>{s.label}</div>
+          <div style={{ fontFamily: FONT.display, fontSize: 23, color: s.color, fontWeight: 600 }}>
+            {s.pre}{RS}{fmtNum(s.val)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // Sequential focus (CSS, not CSS-in-JS) for global focus-visible rings.
 const globalCss = `
+@import url('${FONT_IMPORT_URL}');
+
 * { box-sizing: border-box; }
 
 /* Money + table digits align in columns — zero jitter when figures change. */
-body { font-variant-numeric: tabular-nums; }
+body { font-variant-numeric: tabular-nums; font-family: ${FONT.body}; }
 html, body, #root { height: 100%; }
 body { margin: 0; }
 :focus-visible {
@@ -70,19 +99,19 @@ input:focus {
 
 /* ── Ghost icon buttons (back, close, per-row trash) ── */
 .iconbtn { transition: transform 0.08s ease-out, background-color 0.14s ease-out; }
-.iconbtn:hover { background-color: rgba(26,23,20,0.06); }
+.iconbtn:hover { background-color: rgba(36,31,23,0.07); }
 .iconbtn:active { transform: scale(0.9); }
 .iconbtn:disabled { opacity: 0.45; cursor: not-allowed; }
 
-/* ── Account row hover lift ── */
+/* ── Account row — a ruled line, brass rule reveals on hover (not a card lift) ── */
 .acc-row {
-  transition: border-color 0.15s ease-out, transform 0.15s ease-out, box-shadow 0.15s ease-out;
+  border-left: 3px solid transparent;
+  transition: border-color 0.15s ease-out, background-color 0.15s ease-out;
 }
-.acc-row:hover { border-color: ${C.borderStrong}; transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
-.acc-row:active { transform: translateY(0); box-shadow: none; }
+.acc-row:hover { border-left-color: ${C.accent}; background-color: ${C.hoverRow}; }
 
 /* ── Skeleton pulse ── */
-.skel { background: ${C.border}; border-radius: 4px; animation: skelPulse 1.2s ease-in-out infinite; }
+.skel { background: ${C.border}; border-radius: 3px; animation: skelPulse 1.2s ease-in-out infinite; }
 @keyframes skelPulse {
   0%, 100% { opacity: 0.55; }
   50% { opacity: 1; }
@@ -91,7 +120,7 @@ input:focus {
   .skel { animation: none; }
 }
 
-/* ── Dark sidebar rail ── */
+/* ── Cloth-cover sidebar rail ── */
 .snav {
   width: 100%;
   box-sizing: border-box;
@@ -103,7 +132,7 @@ input:focus {
   color: ${C.sidebarText};
   background: transparent;
   border: none;
-  border-radius: 6px;
+  border-radius: 4px;
   cursor: pointer;
   font-family: inherit;
   text-align: left;
@@ -126,7 +155,7 @@ input:focus {
   background: ${C.accent};
   color: #fff;
   border: none;
-  border-radius: 7px;
+  border-radius: 4px;
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -145,7 +174,7 @@ input:focus {
   content: "";
   position: absolute;
   inset: 0;
-  background: rgba(10,8,12,0.45);
+  background: rgba(19,15,10,0.5);
   animation: ovbackdrop 0.2s ease-out;
 }
 .dialog-pop { position: relative; animation: ovpop 0.22s cubic-bezier(0.16, 1, 0.3, 1); }
@@ -170,16 +199,11 @@ input:focus {
   .view-in { animation: none; }
 }
 
-/* ── Dashboard stat-card count-up lift ── */
-.stat-card { transition: box-shadow 0.18s ease-out, transform 0.18s ease-out; }
-.stat-card:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(0,0,0,0.07); }
-.stat-card:active { transform: translateY(0); box-shadow: none; }
-
 /* ── Sibling stagger for account rows / stat cards ── */
 .stagger > * { animation: viewIn 0.24s cubic-bezier(0.16, 1, 0.3, 1) backwards; animation-delay: calc(var(--i, 0) * 45ms); }
 @media (prefers-reduced-motion: reduce) {
   .stagger > * { animation: none; }
-  .stat-card, .acc-row { transform: none !important; transition: none !important; }
+  .acc-row { transition: none !important; }
 }
 
 /* ── Mobile ── */
@@ -583,26 +607,27 @@ function Ledger({ userId, email, onSignOut }) {
   };
 
   if (loadError && !loaded) return (
-    <div style={{ display: "flex", minHeight: "100dvh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif", padding: SP.lg }}>
+    <div style={{ display: "flex", minHeight: "100dvh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: FONT.body, padding: SP.lg }}>
       <style>{globalCss}</style>
-      <div role="alert" style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, maxWidth: "100%", boxShadow: C.shadowModal, textAlign: "center" }}>
+      <div role="alert" style={{ background: C.card, borderTop: `3px solid ${C.debit}`, padding: 28, width: 380, maxWidth: "100%", boxShadow: C.shadowModal, textAlign: "center" }}>
         <div style={{ width: 48, height: 48, background: C.debitBg, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px" }}>
           <AlertTriangle size={22} color={C.debit} />
         </div>
-        <div style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Couldn't load your ledger</div>
+        <div style={{ fontFamily: FONT.display, fontSize: 17, fontWeight: 600, color: C.textPrimary }}>Couldn't load your ledger</div>
         <p style={{ fontSize: T.body, color: C.textSecondary, margin: "8px 0 20px", overflowWrap: "anywhere" }}>{loadError}</p>
         <div style={{ display: "flex", gap: 10 }}>
           <button type="button" onClick={onSignOut} className="press"
-            style={{ flex: 1, padding: 11, background: C.bg, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>Sign out</button>
+            style={{ flex: 1, padding: 11, background: C.bg, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>Sign out</button>
           <button type="button" onClick={() => setReloadKey((k) => k + 1)} className="press"
-            style={{ flex: 1, padding: 11, background: C.accent, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>Try again</button>
+            style={{ flex: 1, padding: 11, background: C.accent, color: "#fff", border: "none", borderRadius: 4, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>Try again</button>
         </div>
       </div>
     </div>
   );
 
   if (!loaded) return (
-    <div style={{ display: "flex", height: "100dvh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
+    <div style={{ display: "flex", height: "100dvh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: FONT.body }}>
+      <style>{globalCss}</style>
       <div style={{ width: 280, display: "flex", flexDirection: "column", gap: 10 }}>
         <div className="skel" style={{ height: 16, width: "55%" }} />
         <div className="skel" style={{ height: 14 }} />
@@ -624,25 +649,25 @@ function Ledger({ userId, email, onSignOut }) {
   const confirmTxCount = confirmAcc ? data.transactions.filter((t) => t.accountId === confirmAcc.id).length : 0;
 
   return (
-    <div style={{ display: "flex", height: "100dvh", fontFamily: "'Segoe UI', system-ui, sans-serif", background: C.bg, overflow: "hidden", position: "relative" }}>
+    <div style={{ display: "flex", height: "100dvh", fontFamily: FONT.body, background: C.bg, overflow: "hidden", position: "relative" }}>
       <style>{globalCss}</style>
 
       {/* ── Sidebar ── */}
       {isMobile && navOpen && (
         <div onClick={() => setNavOpen(false)} aria-hidden="true"
-          style={{ position: "fixed", inset: 0, background: "rgba(10,8,12,0.45)", zIndex: 140 }} />
+          style={{ position: "fixed", inset: 0, background: "rgba(19,15,10,0.5)", zIndex: 140 }} />
       )}
       <aside aria-label="Primary" id="primary-nav" className={isMobile ? "nav-drawer" + (navOpen ? " open" : "") : undefined}
         style={{ width: isMobile ? "min(280px, 85vw)" : 220, background: C.sidebar, display: "flex", flexDirection: "column", flexShrink: 0, borderRight: `1px solid ${C.sidebarBorder}`,
           ...(isMobile ? { position: "fixed", top: 0, bottom: 0, left: 0, zIndex: 150, transform: navOpen ? "translateX(0)" : "translateX(-100%)", visibility: navOpen ? "visible" : "hidden" } : {}) }}>
         <div style={{ padding: "20px 18px 16px", borderBottom: `1px solid ${C.sidebarBorder}` }}>
           <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-            <div style={{ width: 30, height: 30, background: C.accent, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <div style={{ width: 30, height: 30, background: C.accent, borderRadius: 3, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
               <BookOpen size={15} color="#fff" />
             </div>
             <div>
-              <div style={{ color: "#F0EDE8", fontSize: 13, fontWeight: 600, letterSpacing: "-0.3px" }}>Ledger Book</div>
-              <div style={{ color: C.sidebarLabel, fontSize: 10, letterSpacing: "0.5px", marginTop: 1 }}>ACCOUNT MANAGER</div>
+              <div style={{ fontFamily: FONT.display, color: "#F2EDDF", fontSize: 15, fontWeight: 600 }}>Ledger Book</div>
+              <div style={{ color: C.sidebarLabel, fontSize: 11, marginTop: 1 }}>Personal ledger</div>
             </div>
           </div>
         </div>
@@ -659,7 +684,7 @@ function Ledger({ userId, email, onSignOut }) {
           ))}
 
           {data.accounts.length > 0 && (
-            <div style={{ padding: "12px 10px 6px", fontSize: 10, color: C.sidebarLabel, textTransform: "uppercase", letterSpacing: "1px", fontWeight: 600 }}>Accounts</div>
+            <div style={{ padding: "12px 10px 6px", fontSize: 11, color: C.sidebarLabel, fontWeight: 600 }}>Accounts</div>
           )}
           {data.accounts.map((acc, i) => {
             const active = view === "account" && activeId === acc.id;
@@ -677,15 +702,15 @@ function Ledger({ userId, email, onSignOut }) {
 
         <div style={{ padding: "12px 14px 16px", borderTop: `1px solid ${C.sidebarBorder}`, display: "flex", flexDirection: "column", gap: 6 }}>
           <button type="button" className="scta" onClick={() => { openPanel("add-acc"); setView("dashboard"); }}>
-            <Plus size={13} /> New Account
+            <Plus size={13} /> New account
           </button>
           <div style={{ display: "flex", gap: 6 }}>
             <button type="button" onClick={() => openExport("all")} aria-label="Export all accounts"
-              className="press" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px", background: "rgba(255,255,255,0.06)", color: C.sidebarText, border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+              className="press" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px", background: "rgba(255,255,255,0.06)", color: C.sidebarText, border: "none", borderRadius: 4, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
               <Download size={13} /> Export
             </button>
             <button type="button" onClick={() => { setNavOpen(false); doImport(); }} aria-label="Import from Excel"
-              className="press" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px", background: "rgba(255,255,255,0.06)", color: C.sidebarText, border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+              className="press" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px", background: "rgba(255,255,255,0.06)", color: C.sidebarText, border: "none", borderRadius: 4, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
               <Upload size={13} /> Import
             </button>
           </div>
@@ -704,13 +729,13 @@ function Ledger({ userId, email, onSignOut }) {
         {isMobile && (
           <div style={{ position: "sticky", top: 0, zIndex: 50, flexShrink: 0, display: "flex", alignItems: "center", gap: SP.sm, padding: `${SP.sm}px ${SP.md}px`, background: C.card, borderBottom: `1px solid ${C.border}` }}>
             <button type="button" onClick={() => setNavOpen(true)} aria-label="Open menu" aria-expanded={navOpen} aria-controls="primary-nav" className="iconbtn"
-              style={{ ...resetBtn, padding: 6, borderRadius: 6 }}>
+              style={{ ...resetBtn, padding: 6, borderRadius: 4 }}>
               <Menu size={20} color={C.textPrimary} />
             </button>
-            <div style={{ width: 24, height: 24, background: C.accent, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <div style={{ width: 24, height: 24, background: C.accent, borderRadius: 3, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
               <BookOpen size={13} color="#fff" />
             </div>
-            <div style={{ fontSize: 14, fontWeight: 600, color: C.textPrimary }}>Ledger Book</div>
+            <div style={{ fontFamily: FONT.display, fontSize: 15, fontWeight: 600, color: C.textPrimary }}>Ledger Book</div>
             <div aria-live="polite" style={{ marginLeft: "auto", fontSize: 11, color: syncWarn ? C.debit : C.textSecondary }}>{syncText}</div>
           </div>
         )}
@@ -719,7 +744,7 @@ function Ledger({ userId, email, onSignOut }) {
             <span style={{ overflowWrap: "anywhere" }}>
               {sync.error
                 ? `A change couldn't be saved and was skipped: ${sync.error}`
-                : `${sync.pending} change${sync.pending !== 1 ? "s" : ""} not saved yet${sync.offline ? " — you're offline" : ""}. Kept on this device and retrying…`}
+                : `${sync.pending} change${sync.pending !== 1 ? "s" : ""} not saved yet${sync.offline ? ", you're offline" : ""}. Kept on this device and retrying…`}
             </span>
             <button type="button" onClick={sync.error ? dismissError : retryNow} className="press"
               style={{ ...resetBtn, fontWeight: 600, textDecoration: "underline", color: C.debit }}>
@@ -732,37 +757,30 @@ function Ledger({ userId, email, onSignOut }) {
         {view === "dashboard" && (
           <div className="view-in" style={{ padding: `${SP.xl}px ${pad}px`, flex: 1 }}>
             <div style={{ marginBottom: SP.xl }}>
-              <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: C.textPrimary }}>Dashboard</h1>
-              <p style={{ margin: "4px 0 0", fontSize: 13, color: C.textSecondary }}>{data.accounts.length} account{data.accounts.length !== 1 ? "s" : ""} · {data.transactions.length} transaction{data.transactions.length !== 1 ? "s" : ""}</p>
+              <h1 style={{ margin: 0, fontFamily: FONT.display, fontSize: 22, fontWeight: 600, color: C.textPrimary }}>Dashboard</h1>
+              <p style={{ margin: "4px 0 0", fontSize: 13, color: C.textSecondary }}>{data.accounts.length} account{data.accounts.length !== 1 ? "s" : ""}, {data.transactions.length} transaction{data.transactions.length !== 1 ? "s" : ""} recorded</p>
             </div>
 
             {data.accounts.length === 0 ? (
               <div style={{ textAlign: "center", padding: "80px 0" }}>
-                <div style={{ width: 56, height: 56, background: C.accentBg, borderRadius: 14, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
+                <div style={{ width: 56, height: 56, background: C.accentBg, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
                   <Wallet size={24} color={C.accent} />
                 </div>
-                <div style={{ fontSize: 16, color: C.textPrimary, fontWeight: 500, marginBottom: 6 }}>No accounts yet</div>
+                <div style={{ fontFamily: FONT.display, fontSize: 17, color: C.textPrimary, fontWeight: 600, marginBottom: 6 }}>No accounts yet</div>
                 <div style={{ fontSize: 13, color: C.textSecondary, marginBottom: 20 }}>Create your first account to start tracking money</div>
-                <button type="button" onClick={() => openPanel("add-acc")} className="press" style={{ background: C.accent, color: "#fff", border: "none", borderRadius: 7, padding: "10px 22px", fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
-                  + New Account
+                <button type="button" onClick={() => openPanel("add-acc")} className="press" style={{ background: C.accent, color: "#fff", border: "none", borderRadius: 4, padding: "10px 22px", fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
+                  + New account
                 </button>
               </div>
             ) : (
               <>
-                {/* Summary Stats */}
-                <div className="stagger" style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(3, 1fr)", gap: SP.md, marginBottom: SP.sectionGap }}>
-                  {[
-                    { label: "Total Credit (In)", val: totals.credit, color: C.credit, pre: "+" },
-                    { label: "Total Debit (Out)", val: totals.debit, color: C.debit, pre: "-" },
-                    { label: "Net Balance", val: Math.abs(totals.balance), color: totals.balance >= 0 ? C.credit : C.debit, pre: totals.balance < 0 ? "-" : "" },
-                  ].map((s, i) => (
-                    <div key={i} className="stat-card" style={{ "--i": i, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.lg}px ${SP.cardPad.md}px` }}>
-                      <div style={{ fontSize: 11, color: C.textSecondary, textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: SP.sm }}>{s.label}</div>
-                      <div style={{ fontSize: 21, color: s.color, fontWeight: 700, letterSpacing: "-0.5px" }}>
-                        {s.pre}{RS}{fmtNum(s.val)}
-                      </div>
-                    </div>
-                  ))}
+                {/* Summary — a single ruled line, the way a ledger totals its columns */}
+                <div style={{ marginBottom: SP.sectionGap }}>
+                  <StatStrip isMobile={isMobile} items={[
+                    { label: "Total credit (in)", val: totals.credit, color: C.credit, pre: "+" },
+                    { label: "Total debit (out)", val: totals.debit, color: C.debit, pre: "-" },
+                    { label: "Net balance", val: Math.abs(totals.balance), color: totals.balance >= 0 ? C.credit : C.debit, pre: totals.balance < 0 ? "-" : "" },
+                  ]} />
                 </div>
 
                 {/* Account List */}
@@ -778,17 +796,17 @@ function Ledger({ userId, email, onSignOut }) {
                     onKeyDown={(e) => { if (e.key === "Escape") setAccQuery(""); }}
                     aria-label="Search accounts"
                     placeholder="Search accounts"
-                    style={{ width: "100%", padding: "9px 12px 9px 32px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 13, color: C.textPrimary, background: C.inputBg, fontFamily: "inherit", boxSizing: "border-box" }} />
+                    style={{ width: "100%", padding: "9px 12px 9px 32px", border: `1px solid ${C.border}`, borderRadius: 4, fontSize: 13, color: C.textPrimary, background: C.inputBg, fontFamily: "inherit", boxSizing: "border-box" }} />
                 </div>
-                <div className="stagger" style={{ display: "flex", flexDirection: "column", gap: SP.sm }}>
+                <div className="stagger" style={{ display: "flex", flexDirection: "column", border: filteredStats.length ? `1px solid ${C.border}` : "none" }}>
                   {filteredStats.length === 0 ? (
-                    <div style={{ textAlign: "center", padding: "32px 0", border: `1px dashed ${C.border}`, borderRadius: 10, fontSize: 13, color: C.textSecondary }}>
+                    <div style={{ textAlign: "center", padding: "32px 0", border: `1px dashed ${C.border}`, fontSize: 13, color: C.textSecondary }}>
                       No accounts match
                     </div>
                   ) : (
                     filteredStats.map((acc, i) => (
                       <div key={acc.id} className="acc-row"
-                        style={{ "--i": i, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.md}px ${SP.cardPad.md}px`, width: "100%", display: "flex", alignItems: "center", gap: SP.md }}>
+                        style={{ "--i": i, borderBottom: i < filteredStats.length - 1 ? `1px solid ${C.border}` : "none", padding: `${SP.md}px ${SP.cardPad.md}px`, width: "100%", display: "flex", alignItems: "center", gap: SP.md }}>
                         <button type="button" onClick={() => openAcc(acc.id)}
                           style={{ ...resetBtn, flex: 1, minWidth: 0, gap: SP.md, alignItems: "center", flexWrap: isMobile ? "wrap" : "nowrap" }}>
                           <div style={{ width: 38, height: 38, borderRadius: "50%", background: ACCENT_COLORS[i % ACCENT_COLORS.length] + "18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: ACCENT_COLORS[i % ACCENT_COLORS.length], flexShrink: 0 }}>
@@ -801,7 +819,7 @@ function Ledger({ userId, email, onSignOut }) {
                             </div>
                           </div>
                           <div style={isMobile ? { width: "100%", display: "flex", justifyContent: "space-between", alignItems: "baseline" } : { textAlign: "right" }}>
-                            <div style={{ fontSize: 16, fontWeight: 700, color: acc.balance >= 0 ? C.credit : C.debit }}>
+                            <div style={{ fontFamily: FONT.display, fontSize: 16, fontWeight: 600, color: acc.balance >= 0 ? C.credit : C.debit }}>
                               {acc.balance < 0 ? "-" : ""}{RS}{fmtNum(acc.balance)}
                             </div>
                             <div style={{ fontSize: 11, color: C.textSecondary, marginTop: 2 }}>
@@ -813,7 +831,7 @@ function Ledger({ userId, email, onSignOut }) {
                           {!isMobile && <ChevronRight size={15} color={C.iconMuted} />}
                         </button>
                         <button type="button" onClick={() => requestRenameAcc(acc.id)} aria-label={`Rename ${acc.name}`} className="iconbtn"
-                          style={{ ...resetBtn, color: C.textSecondary, padding: 4, borderRadius: 6, flexShrink: 0 }}>
+                          style={{ ...resetBtn, color: C.textSecondary, padding: 4, borderRadius: 4, flexShrink: 0 }}>
                           <Pencil size={15} color={C.iconMuted} />
                         </button>
                       </div>
@@ -832,45 +850,40 @@ function Ledger({ userId, email, onSignOut }) {
               <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", alignItems: isMobile ? "stretch" : "center", justifyContent: "space-between", gap: isMobile ? SP.md : 0, marginBottom: SP.lg }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <button type="button" onClick={() => setView("dashboard")} aria-label="Back to dashboard" className="iconbtn"
-                    style={{ ...resetBtn, color: C.textSecondary, padding: 4, borderRadius: 6 }}>
+                    style={{ ...resetBtn, color: C.textSecondary, padding: 4, borderRadius: 4 }}>
                     <ChevronLeft size={18} />
                   </button>
                   <div>
-                    <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: C.textPrimary }}>{activeAcc.name}</h1>
+                    <h1 style={{ margin: 0, fontFamily: FONT.display, fontSize: 22, fontWeight: 600, color: C.textPrimary }}>{activeAcc.name}</h1>
                     <div style={{ fontSize: 12, color: C.textSecondary }}>{activeStat?.count ?? 0} entr{activeStat?.count === 1 ? "y" : "ies"}</div>
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <button type="button" onClick={() => openPanel("add-tx", "credit")} className="press"
-                    style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 14px", ...(isMobile ? { flex: 1, justifyContent: "center" } : {}), background: C.credit, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                    <ArrowDownLeft size={13} /> Credit (In)
+                    style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 14px", ...(isMobile ? { flex: 1, justifyContent: "center" } : {}), background: C.credit, color: "#fff", border: "none", borderRadius: 4, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                    <ArrowDownLeft size={13} /> Credit (in)
                   </button>
                   <button type="button" onClick={() => openPanel("add-tx", "debit")} className="press"
-                    style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 14px", ...(isMobile ? { flex: 1, justifyContent: "center" } : {}), background: C.debit, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                    <ArrowUpRight size={13} /> Debit (Out)
+                    style={{ display: "flex", alignItems: "center", gap: 5, padding: "8px 14px", ...(isMobile ? { flex: 1, justifyContent: "center" } : {}), background: C.debit, color: "#fff", border: "none", borderRadius: 4, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                    <ArrowUpRight size={13} /> Debit (out)
                   </button>
                   <button type="button" onClick={() => openExport(activeAcc.id)} aria-label={`Export ${activeAcc.name}`} className="iconbtn"
-                    style={{ padding: "8px 10px", background: "none", border: `1px solid ${C.border}`, borderRadius: 7, cursor: "pointer", color: C.textSecondary, display: "flex" }}>
+                    style={{ padding: "8px 10px", background: "none", border: `1px solid ${C.border}`, borderRadius: 4, cursor: "pointer", color: C.textSecondary, display: "flex" }}>
                     <Download size={13} />
                   </button>
                   <button type="button" onClick={() => requestDeleteAcc(activeAcc.id)} aria-label={`Delete ${activeAcc.name} account`} className="iconbtn"
-                    style={{ padding: "8px 10px", background: "none", border: `1px solid ${C.border}`, borderRadius: 7, cursor: "pointer", color: C.debit, display: "flex" }}>
+                    style={{ padding: "8px 10px", background: "none", border: `1px solid ${C.border}`, borderRadius: 4, cursor: "pointer", color: C.debit, display: "flex" }}>
                     <Trash2 size={13} />
                   </button>
                 </div>
               </div>
 
-              <div style={{ display: "flex", flexWrap: "wrap", gap: SP.md, paddingBottom: SP.lg }}>
-                {[
-                  { label: "Total Credit", val: activeStat?.credit || 0, color: C.credit },
-                  { label: "Total Debit", val: activeStat?.debit || 0, color: C.debit },
-                  { label: "Balance", val: activeStat?.balance || 0, color: (activeStat?.balance || 0) >= 0 ? C.credit : C.debit },
-                ].map((s, i) => (
-                  <div key={i} className="stat-card" style={{ flex: isMobile ? "1 1 calc(50% - 6px)" : 1, minWidth: 0, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.lg}px ${SP.cardPad.md}px` }}>
-                    <div style={{ fontSize: 11, color: C.textSecondary, textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: SP.sm }}>{s.label}</div>
-                    <div style={{ fontSize: 16, color: s.color, fontWeight: 700 }}>{s.val < 0 ? "-" : ""}{RS}{fmtNum(s.val)}</div>
-                  </div>
-                ))}
+              <div style={{ paddingBottom: SP.lg }}>
+                <StatStrip isMobile={isMobile} items={[
+                  { label: "Total credit", val: activeStat?.credit || 0, color: C.credit, pre: "" },
+                  { label: "Total debit", val: activeStat?.debit || 0, color: C.debit, pre: "" },
+                  { label: "Balance", val: activeStat?.balance || 0, color: (activeStat?.balance || 0) >= 0 ? C.credit : C.debit, pre: (activeStat?.balance || 0) < 0 ? "-" : "" },
+                ]} />
               </div>
             </div>
 
@@ -881,9 +894,9 @@ function Ledger({ userId, email, onSignOut }) {
                   <div style={{ fontSize: 12 }}>Use the Credit / Debit buttons above to record entries</div>
                 </div>
               ) : isMobile ? (
-                <ul style={{ listStyle: "none", margin: `${SP.md}px 0 0`, padding: 0, display: "flex", flexDirection: "column", gap: SP.sm }}>
-                  {txsWithBalance.map((tx) => (
-                    <li key={tx.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: `${SP.md}px ${SP.lg}px` }}>
+                <ul style={{ listStyle: "none", margin: `${SP.md}px 0 0`, padding: 0, display: "flex", flexDirection: "column" }}>
+                  {txsWithBalance.map((tx, i) => (
+                    <li key={tx.id} style={{ borderBottom: i < txsWithBalance.length - 1 ? `1px solid ${C.border}` : "none", padding: `${SP.md}px 4px` }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: SP.md }}>
                         <div style={{ fontSize: 14, fontWeight: 600, color: C.textPrimary, minWidth: 0, overflowWrap: "anywhere" }}>{tx.description}</div>
                         <div style={{ fontSize: 15, fontWeight: 700, color: tx.type === "credit" ? C.credit : C.debit, flexShrink: 0 }}>
@@ -891,9 +904,9 @@ function Ledger({ userId, email, onSignOut }) {
                         </div>
                       </div>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: SP.xs }}>
-                        <div style={{ fontSize: 12, color: tx.runBal < 0 ? C.debit : C.textSecondary }}>
-                          {fmtDate(tx.date)}
-                          {" · "}Bal {tx.runBal < 0 ? "Dr " : ""}{fmtNum(tx.runBal)}
+                        <div style={{ fontSize: 12, color: tx.runBal < 0 ? C.debit : C.textSecondary, display: "flex", gap: 8 }}>
+                          <span>{fmtDate(tx.date)}</span>
+                          <span>Bal {tx.runBal < 0 ? "Dr " : ""}{fmtNum(tx.runBal)}</span>
                         </div>
                         <div style={{ display: "flex", gap: 2, margin: "-8px -8px -8px 0" }}>
                           <button type="button" onClick={() => openEditTx(tx)} aria-label={`Edit transaction: ${tx.description}`} className="iconbtn"
@@ -912,7 +925,7 @@ function Ledger({ userId, email, onSignOut }) {
               ) : (
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: T.body, marginTop: SP.lg }}>
                   <thead>
-                    <tr style={{ background: C.tableHead }}>
+                    <tr>
                       {[
                         { label: "Date", align: "left", w: "110px" },
                         { label: "Description", align: "left", w: "auto" },
@@ -921,7 +934,7 @@ function Ledger({ userId, email, onSignOut }) {
                         { label: "Balance", align: "right", w: "130px" },
                         { label: "", align: "right", w: "64px" },
                       ].map((h, i) => (
-                        <th key={i} style={{ padding: `${SP.feet.t}px 12px`, textAlign: h.align, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.7px", color: C.textSecondary, borderBottom: `2px solid ${C.border}`, width: h.w, fontWeight: 600, whiteSpace: "nowrap" }}>
+                        <th key={i} style={{ padding: `${SP.feet.t}px 12px`, textAlign: h.align, fontSize: 12, color: C.textSecondary, borderBottom: `2px solid ${C.textPrimary}`, width: h.w, fontWeight: 600, whiteSpace: "nowrap" }}>
                           {h.label}
                         </th>
                       ))}
@@ -973,7 +986,7 @@ function Ledger({ userId, email, onSignOut }) {
         {view === "charts" && (
           <Suspense fallback={
             <div className="view-in" style={{ padding: `${SP.xl}px ${pad}px`, flex: 1, color: C.textSecondary, fontSize: 13 }}>
-              <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600, color: C.textPrimary }}>Charts</h1>
+              <h1 style={{ margin: 0, fontFamily: FONT.display, fontSize: 22, fontWeight: 600, color: C.textPrimary }}>Charts</h1>
               <div style={{ marginTop: 20, display: "flex", flexDirection: "column", gap: 10 }}>
                 <div className="skel" style={{ height: 14, width: "100%" }} />
                 <div className="skel" style={{ height: 14, width: "85%" }} />
@@ -988,26 +1001,26 @@ function Ledger({ userId, email, onSignOut }) {
 
       {/* ── Side Panels (Overlay) ── */}
       {panel && (
-        <div ref={panelRef} className="overlay" style={{ position: "fixed", inset: 0, background: "rgba(10,8,12,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }}
+        <div ref={panelRef} className="overlay" style={{ position: "fixed", inset: 0, background: "rgba(19,15,10,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }}
           onClick={(e) => { if (e.target === e.currentTarget) closePanel(); }}>
           {/* add-tx */}
           {panel === "add-tx" && activeAcc && (
             <div role="dialog" aria-modal="true" aria-labelledby="addtx-title" className="dialog-pop"
-              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal }}>
+              style={{ background: C.card, borderTop: `3px solid ${txForm.type === "credit" ? C.credit : C.debit}`, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-                <div id="addtx-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>{editTx ? "Edit entry" : "Add entry"} — {activeAcc.name}</div>
-                <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 6, padding: 3 }}>
+                <div id="addtx-title" style={{ fontFamily: FONT.display, fontSize: 17, fontWeight: 600, color: C.textPrimary }}>{editTx ? "Edit entry" : "Add entry"} in {activeAcc.name}</div>
+                <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 4, padding: 3 }}>
                   <X size={17} color={C.textSecondary} />
                 </button>
               </div>
 
-              <div style={{ display: "flex", background: C.bg, borderRadius: 8, padding: 3, marginBottom: 20 }}>
+              <div style={{ display: "flex", background: C.bg, borderRadius: 4, padding: 3, marginBottom: 20 }}>
                 {[
-                  { type: "credit", label: "Credit (Money In)", icon: <ArrowDownLeft size={13} />, color: C.credit },
-                  { type: "debit", label: "Debit (Money Out)", icon: <ArrowUpRight size={13} />, color: C.debit },
+                  { type: "credit", label: "Credit (money in)", icon: <ArrowDownLeft size={13} />, color: C.credit },
+                  { type: "debit", label: "Debit (money out)", icon: <ArrowUpRight size={13} />, color: C.debit },
                 ].map((t) => (
                   <button key={t.type} type="button" aria-pressed={txForm.type === t.type} onClick={() => setTxForm((f) => ({ ...f, type: t.type }))}
-                    style={{ flex: 1, padding: "8px 6px", border: "none", borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: 600,
+                    style={{ flex: 1, padding: "8px 6px", border: "none", borderRadius: 3, cursor: "pointer", fontSize: 12, fontWeight: 600,
                       fontFamily: "inherit",
                       background: txForm.type === t.type ? (t.type === "credit" ? C.credit : C.debit) : "transparent",
                       color: txForm.type === t.type ? "#fff" : C.textSecondary,
@@ -1023,19 +1036,19 @@ function Ledger({ userId, email, onSignOut }) {
                 { label: "Date", key: "date", type: "date", placeholder: "", id: "tx-date" },
               ].map((f) => (
                 <div key={f.key} style={{ marginBottom: 14 }}>
-                  <label htmlFor={f.id} style={{ display: "block", fontSize: 11, color: C.textSecondary, textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 5 }}>{f.label}</label>
+                  <label htmlFor={f.id} style={captionStyle}>{f.label}</label>
                   <input id={f.id} type={f.type} placeholder={f.placeholder} value={txForm[f.key]}
                     onChange={(e) => setTxForm((x) => ({ ...x, [f.key]: e.target.value }))}
                     onKeyDown={(e) => e.key === "Enter" && doAddTx()}
-                    style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: T.body, color: C.textPrimary, background: C.inputBg, boxSizing: "border-box", fontFamily: "inherit" }} />
+                    style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 4, fontSize: T.body, color: C.textPrimary, background: C.inputBg, boxSizing: "border-box", fontFamily: "inherit" }} />
                 </div>
               ))}
 
               {err && <div style={{ color: C.debit, fontSize: 12, marginBottom: 12 }}>{err}</div>}
 
               <button type="button" onClick={doAddTx} className="press"
-                style={{ width: "100%", padding: 11, background: txForm.type === "credit" ? C.credit : C.debit, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
-                {editTx ? "Save Changes" : `Add ${txForm.type === "credit" ? "Credit" : "Debit"} Entry`}
+                style={{ width: "100%", padding: 11, background: txForm.type === "credit" ? C.credit : C.debit, color: "#fff", border: "none", borderRadius: 4, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
+                {editTx ? "Save changes" : `Add ${txForm.type === "credit" ? "credit" : "debit"} entry`}
               </button>
             </div>
           )}
@@ -1043,10 +1056,10 @@ function Ledger({ userId, email, onSignOut }) {
           {/* add-acc */}
           {panel === "add-acc" && (
             <div role="dialog" aria-modal="true" aria-labelledby="addacc-title" className="dialog-pop"
-              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal }}>
+              style={{ background: C.card, borderTop: `3px solid ${C.accent}`, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-                <div id="addacc-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>New account</div>
-                <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 6, padding: 3 }}>
+                <div id="addacc-title" style={{ fontFamily: FONT.display, fontSize: 17, fontWeight: 600, color: C.textPrimary }}>New account</div>
+                <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 4, padding: 3 }}>
                   <X size={17} color={C.textSecondary} />
                 </button>
               </div>
@@ -1056,19 +1069,19 @@ function Ledger({ userId, email, onSignOut }) {
                 { label: "Opening balance (optional)", key: "opening", type: "number", placeholder: "0.00", id: "acc-opening" },
               ].map((f) => (
                 <div key={f.key} style={{ marginBottom: 14 }}>
-                  <label htmlFor={f.id} style={{ display: "block", fontSize: 11, color: C.textSecondary, textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 5 }}>{f.label}</label>
+                  <label htmlFor={f.id} style={captionStyle}>{f.label}</label>
                   <input id={f.id} type={f.type} placeholder={f.placeholder} value={accForm[f.key]}
                     onChange={(e) => setAccForm((x) => ({ ...x, [f.key]: e.target.value }))}
                     onKeyDown={(e) => e.key === "Enter" && doAddAcc()}
-                    style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: T.body, color: C.textPrimary, background: C.inputBg, boxSizing: "border-box", fontFamily: "inherit" }} />
+                    style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 4, fontSize: T.body, color: C.textPrimary, background: C.inputBg, boxSizing: "border-box", fontFamily: "inherit" }} />
                 </div>
               ))}
 
               {err && <div style={{ color: C.debit, fontSize: 12, marginBottom: 12 }}>{err}</div>}
 
               <button type="button" onClick={doAddAcc} className="press"
-                style={{ width: "100%", padding: 11, background: C.accent, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
-                Create Account
+                style={{ width: "100%", padding: 11, background: C.accent, color: "#fff", border: "none", borderRadius: 4, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
+                Create account
               </button>
             </div>
           )}
@@ -1076,23 +1089,23 @@ function Ledger({ userId, email, onSignOut }) {
           {/* rename-acc */}
           {panel === "rename-acc" && rename && (
             <div role="dialog" aria-modal="true" aria-labelledby="rename-acc-title" className="dialog-pop"
-              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal }}>
+              style={{ background: C.card, borderTop: `3px solid ${C.accent}`, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-                <div id="rename-acc-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Rename account</div>
-                <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 6, padding: 3 }}>
+                <div id="rename-acc-title" style={{ fontFamily: FONT.display, fontSize: 17, fontWeight: 600, color: C.textPrimary }}>Rename account</div>
+                <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 4, padding: 3 }}>
                   <X size={17} color={C.textSecondary} />
                 </button>
               </div>
               <div style={{ marginBottom: 14 }}>
-                <label htmlFor="rename-name" style={{ display: "block", fontSize: 11, color: C.textSecondary, textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 5 }}>Account name</label>
+                <label htmlFor="rename-name" style={captionStyle}>Account name</label>
                 <input id="rename-name" type="text" placeholder="e.g. Cash, Savings, Business…" value={rename.name}
                   onChange={(e) => setRename((r) => ({ ...r, name: e.target.value }))}
                   onKeyDown={(e) => e.key === "Enter" && doRenameAcc()}
-                  style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: T.body, color: C.textPrimary, background: C.inputBg, boxSizing: "border-box", fontFamily: "inherit" }} />
+                  style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 4, fontSize: T.body, color: C.textPrimary, background: C.inputBg, boxSizing: "border-box", fontFamily: "inherit" }} />
               </div>
               {err && <div style={{ color: C.debit, fontSize: 12, marginBottom: 12 }}>{err}</div>}
               <button type="button" onClick={doRenameAcc} id="rename-ok" className="press"
-                style={{ width: "100%", padding: 11, background: C.accent, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
+                style={{ width: "100%", padding: 11, background: C.accent, color: "#fff", border: "none", borderRadius: 4, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
                 Save
               </button>
             </div>
@@ -1101,28 +1114,28 @@ function Ledger({ userId, email, onSignOut }) {
           {/* export — format chooser */}
           {panel === "export" && (
             <div role="dialog" aria-modal="true" aria-labelledby="export-title" className="dialog-pop"
-              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal }}>
+              style={{ background: C.card, borderTop: `3px solid ${C.accent}`, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                <div id="export-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Export</div>
-                <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 6, padding: 3 }}>
+                <div id="export-title" style={{ fontFamily: FONT.display, fontSize: 17, fontWeight: 600, color: C.textPrimary }}>Export</div>
+                <button type="button" onClick={closePanel} aria-label="Close" className="iconbtn" style={{ ...resetBtn, borderRadius: 4, padding: 3 }}>
                   <X size={17} color={C.textSecondary} />
                 </button>
               </div>
               <p style={{ margin: "0 0 18px", fontSize: 13, color: C.textSecondary }}>
                 {exportScope === "all"
                   ? "All accounts"
-                  : `Account — ${data.accounts.find((a) => a.id === exportScope)?.name || ""}`}
+                  : `Account: ${data.accounts.find((a) => a.id === exportScope)?.name || ""}`}
               </p>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 <button type="button" onClick={() => { runExport(exportScope, "xlsx"); closePanel(); }} id="export-xlsx" className="press"
-                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", background: C.bg, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 9, fontSize: T.body, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", background: C.bg, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: T.body, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
                   <FileSpreadsheet size={18} color={C.accent} />
-                  <span>Excel — .xlsx</span>
+                  <span>Excel (.xlsx)</span>
                 </button>
                 <button type="button" onClick={() => { runExport(exportScope, "pdf"); closePanel(); }} id="export-pdf" className="press"
-                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", background: C.bg, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 9, fontSize: T.body, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 16px", background: C.bg, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: T.body, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", textAlign: "left" }}>
                   <FileText size={18} color={C.debit} />
-                  <span>PDF — print-ready report</span>
+                  <span>PDF, print-ready report</span>
                 </button>
               </div>
             </div>
@@ -1131,21 +1144,21 @@ function Ledger({ userId, email, onSignOut }) {
           {/* confirm-del-tx */}
           {panel === "confirm-del-tx" && confirmTx && (
             <div role="alertdialog" aria-modal="true" aria-labelledby="confirmtx-title" aria-describedby="confirmtx-desc" className="dialog-pop"
-              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal, textAlign: "center" }}>
+              style={{ background: C.card, borderTop: `3px solid ${C.debit}`, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal, textAlign: "center" }}>
               <div style={{ width: 48, height: 48, background: C.debitBg, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px" }}>
                 <AlertTriangle size={22} color={C.debit} />
               </div>
-              <div id="confirmtx-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Delete this entry?</div>
+              <div id="confirmtx-title" style={{ fontFamily: FONT.display, fontSize: 17, fontWeight: 600, color: C.textPrimary }}>Delete this entry?</div>
               <p id="confirmtx-desc" style={{ fontSize: T.body, color: C.textSecondary, margin: "8px 0 20px" }}>
-                {confirmTx.description} · {RS}{fmtNum(confirmTx.amount)} on {fmtDate(confirmTx.date)}
+                {confirmTx.description}, {RS}{fmtNum(confirmTx.amount)} on {fmtDate(confirmTx.date)}
               </p>
               <div style={{ display: "flex", gap: 10 }}>
                 <button type="button" onClick={closePanel} id="confirm-cancel" className="press"
-                  style={{ flex: 1, padding: 11, background: C.bg, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
+                  style={{ flex: 1, padding: 11, background: C.bg, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
                   Keep
                 </button>
                 <button type="button" onClick={doConfirmDeleteTx} id="confirm-ok" className="press"
-                  style={{ flex: 1, padding: 11, background: C.debit, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
+                  style={{ flex: 1, padding: 11, background: C.debit, color: "#fff", border: "none", borderRadius: 4, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
                   Delete
                 </button>
               </div>
@@ -1155,21 +1168,21 @@ function Ledger({ userId, email, onSignOut }) {
           {/* confirm-del */}
           {panel === "confirm-del" && confirmAcc && (
             <div role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-desc" className="dialog-pop"
-              style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal, textAlign: "center" }}>
+              style={{ background: C.card, borderTop: `3px solid ${C.debit}`, padding: 28, width: 380, maxWidth: "calc(100vw - 32px)", maxHeight: "calc(100dvh - 32px)", overflowY: "auto", boxShadow: C.shadowModal, textAlign: "center" }}>
               <div style={{ width: 48, height: 48, background: C.debitBg, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 14px" }}>
                 <AlertTriangle size={22} color={C.debit} />
               </div>
-              <div id="confirm-title" style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Delete {confirmAcc.name}?</div>
+              <div id="confirm-title" style={{ fontFamily: FONT.display, fontSize: 17, fontWeight: 600, color: C.textPrimary }}>Delete {confirmAcc.name}?</div>
               <p id="confirm-desc" style={{ fontSize: T.body, color: C.textSecondary, margin: "8px 0 20px" }}>
                 This permanently removes the account and its {confirmTxCount} entr{confirmTxCount !== 1 ? "ies" : "y"} from the ledger.
               </p>
               <div style={{ display: "flex", gap: 10 }}>
                 <button type="button" onClick={closePanel} id="confirm-cancel" className="press"
-                  style={{ flex: 1, padding: 11, background: C.bg, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
+                  style={{ flex: 1, padding: 11, background: C.bg, color: C.textPrimary, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
                   Keep
                 </button>
                 <button type="button" onClick={doConfirmDeleteAcc} id="confirm-ok" className="press"
-                  style={{ flex: 1, padding: 11, background: C.debit, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
+                  style={{ flex: 1, padding: 11, background: C.debit, color: "#fff", border: "none", borderRadius: 4, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
                   Delete
                 </button>
               </div>
@@ -1181,7 +1194,7 @@ function Ledger({ userId, email, onSignOut }) {
       {/* Export/import toast */}
       {notice && (
         <div role="status" aria-live="polite" className="dialog-pop"
-          style={{ position: "fixed", top: SP.lg, right: SP.lg, ...(isMobile ? { left: SP.lg } : {}), zIndex: 300, background: C.card, border: `1px solid ${C.border}`, borderRadius: 10, padding: "10px 16px", fontSize: 13, color: C.textPrimary, boxShadow: C.shadowModal }}>
+          style={{ position: "fixed", top: SP.lg, right: SP.lg, ...(isMobile ? { left: SP.lg } : {}), zIndex: 300, background: C.card, borderLeft: `3px solid ${C.accent}`, padding: "10px 16px", fontSize: 13, color: C.textPrimary, boxShadow: C.shadowModal }}>
           {notice}
         </div>
       )}
@@ -1214,24 +1227,24 @@ function Login() {
 
   const field = (label, id, type, value, set, auto) => (
     <div style={{ marginBottom: 14 }}>
-      <label htmlFor={id} style={{ display: "block", fontSize: 11, color: C.textSecondary, textTransform: "uppercase", letterSpacing: "0.7px", marginBottom: 5 }}>{label}</label>
+      <label htmlFor={id} style={captionStyle}>{label}</label>
       <input id={id} type={type} value={value} autoComplete={auto}
         onChange={(e) => set(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && submit()}
-        style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: T.body, color: C.textPrimary, background: C.inputBg, boxSizing: "border-box", fontFamily: "inherit" }} />
+        style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 4, fontSize: T.body, color: C.textPrimary, background: C.inputBg, boxSizing: "border-box", fontFamily: "inherit" }} />
     </div>
   );
 
   return (
-    <div style={{ display: "flex", minHeight: "100dvh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif", padding: SP.lg }}>
+    <div style={{ display: "flex", minHeight: "100dvh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: FONT.body, padding: SP.lg }}>
       <style>{globalCss}</style>
-      <div className="dialog-pop" style={{ background: C.card, borderRadius: 12, padding: 28, width: 380, maxWidth: "100%", boxShadow: C.shadowModal }}>
+      <div className="dialog-pop" style={{ background: C.card, borderTop: `3px solid ${C.accent}`, padding: 28, width: 380, maxWidth: "100%", boxShadow: C.shadowModal }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 22 }}>
-          <div style={{ width: 32, height: 32, background: C.accent, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ width: 32, height: 32, background: C.accent, borderRadius: 3, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <BookOpen size={16} color="#fff" />
           </div>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 600, color: C.textPrimary }}>Ledger Book</div>
+            <div style={{ fontFamily: FONT.display, fontSize: 17, fontWeight: 600, color: C.textPrimary }}>Ledger Book</div>
             <div style={{ fontSize: 12, color: C.textSecondary }}>{mode === "in" ? "Sign in to your ledger" : "Create your account"}</div>
           </div>
         </div>
@@ -1244,7 +1257,7 @@ function Login() {
         )}
 
         <button type="button" onClick={submit} disabled={busy} className="press"
-          style={{ width: "100%", padding: 11, background: C.accent, color: "#fff", border: "none", borderRadius: 7, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
+          style={{ width: "100%", padding: 11, background: C.accent, color: "#fff", border: "none", borderRadius: 4, fontSize: T.body, fontWeight: 600, cursor: "pointer" }}>
           {busy ? "Please wait…" : mode === "in" ? "Sign in" : "Create account"}
         </button>
 
@@ -1263,7 +1276,7 @@ export default function LedgerApp() {
   useEffect(() => onAuthChange(setSession), []);
 
   if (session === undefined) return (
-    <div style={{ display: "flex", height: "100dvh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: "'Segoe UI', system-ui, sans-serif", color: C.textSecondary, fontSize: 13 }}>
+    <div style={{ display: "flex", height: "100dvh", alignItems: "center", justifyContent: "center", background: C.bg, fontFamily: FONT.body, color: C.textSecondary, fontSize: 13 }}>
       <style>{globalCss}</style>
       Loading…
     </div>
